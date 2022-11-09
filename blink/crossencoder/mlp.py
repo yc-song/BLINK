@@ -404,9 +404,10 @@ class BertIntermediate(nn.Module):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]
         else:
             self.intermediate_act_fn = config.hidden_act
-
+        self.dropout=nn.Dropout(0.1)
     def forward(self, hidden_states):
         hidden_states = self.dense(hidden_states)
+        hidden_states = self.dropout(hidden_states)
         hidden_states = self.intermediate_act_fn(hidden_states)
         return hidden_states
 
@@ -416,10 +417,13 @@ class BertOutput(nn.Module):
         super(BertOutput, self).__init__()
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-
+        self.act_fn=nn.GELU()
+        self.LayerNorm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        
     def forward(self, hidden_states):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
+        hidden_states = self.act_fn(hidden_states)
         return hidden_states
 
 
@@ -431,7 +435,7 @@ class BertLayer(nn.Module):
         self.output = BertOutput(config)
 
     def forward(self, hidden_states, attention_mask, head_mask=None):
-        intermediate_output = self.intermediate(hidden_states)
+        intermediate_output=self.intermediate(hidden_states)
         layer_output = self.output(intermediate_output)
         outputs=(layer_output,)
         return outputs
@@ -474,13 +478,10 @@ class BertPooler(nn.Module):
         super(BertPooler, self).__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.activation = nn.Tanh()
-
     def forward(self, hidden_states):
         # We "pool" the model by simply taking the hidden state corresponding
         # to the first token.
-        first_token_tensor = hidden_states[:, 0]
-        pooled_output = self.dense(first_token_tensor)
-        pooled_output = self.activation(pooled_output)
+        pooled_output=torch.mean(hidden_states,1)
         return pooled_output
 
 
