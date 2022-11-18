@@ -6,7 +6,8 @@
 #
 import argparse
 import prettytable
-
+import sys
+sys.path.append('/home/jongsong/BLINK')
 import blink.main_dense as main_dense
 import blink.candidate_ranking.utils as utils
 
@@ -33,8 +34,8 @@ DATASETS = [
 ]
 
 PARAMETERS = {
-    "faiss_index": None,
-    "index_path": None,
+    "faiss_index": "flat",
+    "index_path": "models/faiss_flat_index.pkl",
     "test_entities": None,
     "test_mentions": None,
     "interactive": False,

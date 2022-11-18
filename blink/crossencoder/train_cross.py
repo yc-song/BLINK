@@ -14,9 +14,10 @@ import io
 import random
 import time
 import numpy as np
-
+import sys
+sys.path.append('/home/jongsong/BLINK')
 from multiprocessing.pool import ThreadPool
-
+from torch import optim
 from tqdm import tqdm, trange
 from collections import OrderedDict
 
@@ -35,12 +36,12 @@ import blink.biencoder.data_process as data
 from blink.biencoder.zeshel_utils import DOC_PATH, WORLDS, world_to_id
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import BlinkParser
-
+from blink.crossencoder.mlp import MlpModel
 
 logger = None
 
 
-def modify(context_input, candidate_input, max_seq_length):
+def modify(context_input, candidate_input):
     new_input = []
     context_input = context_input.tolist()
     candidate_input = candidate_input.tolist()
@@ -50,18 +51,17 @@ def modify(context_input, candidate_input, max_seq_length):
         cur_candidate = candidate_input[i]
         mod_input = []
         for j in range(len(cur_candidate)):
-            # remove [CLS] token from candidate
-            sample = cur_input + cur_candidate[j][1:]
-            sample = sample[:max_seq_length]
+            sample = cur_input + cur_candidate[j]
             mod_input.append(sample)
 
         new_input.append(mod_input)
+    new_input=torch.FloatTensor(new_input)
 
-    return torch.LongTensor(new_input)
+    return new_input
 
 
 def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=False, silent=True):
-    reranker.model.eval()
+    reranker.eval()
     if silent:
         iter_ = eval_dataloader
     else:
@@ -91,7 +91,6 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=F
         label_input = batch[1]
         with torch.no_grad():
             eval_loss, logits = reranker(context_input, label_input, context_length)
-
         logits = logits.detach().cpu().numpy()
         label_ids = label_input.cpu().numpy()
 
@@ -163,7 +162,8 @@ def main(params):
     logger = utils.get_logger(params["output_path"])
 
     # Init model
-    reranker = CrossEncoderRanker(params)
+    reranker= MlpModel(params)
+    # reranker = CrossEncoderRanker(params)
     tokenizer = reranker.tokenizer
     model = reranker.model
 
@@ -199,20 +199,23 @@ def main(params):
     max_seq_length = params["max_seq_length"]
     context_length = params["max_context_length"]
     
-    fname = os.path.join(params["data_path"], "train.t7")
+    fname = os.path.join(params["data_path"], "test.t7")
     train_data = torch.load(fname)
     context_input = train_data["context_vecs"]
+    # print("train context", context_input.shape) 
     candidate_input = train_data["candidate_vecs"]
+    # print("train candidate", candidate_input.shape)
     label_input = train_data["labels"]
+
     if params["debug"]:
         max_n = 200
         context_input = context_input[:max_n]
         candidate_input = candidate_input[:max_n]
         label_input = label_input[:max_n]
 
-    context_input = modify(context_input, candidate_input, max_seq_length)
+    context_input = modify(context_input, candidate_input)
     if params["zeshel"]:
-        src_input = train_data['worlds'][:len(context_input)]
+        src_input = train_data['worlds'][:]
         train_tensor_data = TensorDataset(context_input, label_input, src_input)
     else:
         train_tensor_data = TensorDataset(context_input, label_input)
@@ -223,7 +226,6 @@ def main(params):
         sampler=train_sampler, 
         batch_size=params["train_batch_size"]
     )
-
     fname = os.path.join(params["data_path"], "valid.t7")
     valid_data = torch.load(fname)
     context_input = valid_data["context_vecs"]
@@ -234,10 +236,12 @@ def main(params):
         context_input = context_input[:max_n]
         candidate_input = candidate_input[:max_n]
         label_input = label_input[:max_n]
-
-    context_input = modify(context_input, candidate_input, max_seq_length)
+    # print("valid context", context_input.shape)
+    # print("valid candidate", candidate_input.shape)
+    context_input = modify(context_input, candidate_input)
+    # print("valid modify", context_input.shape)
     if params["zeshel"]:
-        src_input = valid_data["worlds"][:len(context_input)]
+        src_input = valid_data["worlds"][:]
         valid_tensor_data = TensorDataset(context_input, label_input, src_input)
     else:
         valid_tensor_data = TensorDataset(context_input, label_input)
@@ -273,8 +277,8 @@ def main(params):
         "device: {} n_gpu: {}, distributed training: {}".format(device, n_gpu, False)
     )
 
-    optimizer = get_optimizer(model, params)
-    scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
+    optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=1)
 
     model.train()
 
@@ -295,6 +299,9 @@ def main(params):
         part = 0
         for step, batch in enumerate(iter_):
             batch = tuple(t.to(device) for t in batch)
+            # print(batch)
+            # print(batch[0].shape)
+            # print(batch[1].shape)
             context_input = batch[0] 
             label_input = batch[1]
             loss, _ = reranker(context_input, label_input, context_length)
@@ -343,7 +350,7 @@ def main(params):
                     model_output_path, "epoch_{}_{}".format(epoch_idx, part)
                 )
                 part += 1
-                utils.save_model(model, tokenizer, epoch_output_folder_path)
+                # utils.save_model(model, tokenizer, epoch_output_folder_path)
                 model.train()
                 logger.info("\n")
 
@@ -351,7 +358,7 @@ def main(params):
         epoch_output_folder_path = os.path.join(
             model_output_path, "epoch_{}".format(epoch_idx)
         )
-        utils.save_model(model, tokenizer, epoch_output_folder_path)
+        # utils.save_model(model, tokenizer, epoch_output_folder_path)
         # reranker.save(epoch_output_folder_path)
 
         output_eval_file = os.path.join(epoch_output_folder_path, "eval_results.txt")

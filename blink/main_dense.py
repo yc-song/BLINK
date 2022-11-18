@@ -7,7 +7,7 @@
 import argparse
 import json
 import sys
-
+sys.path.append('/home/jongsong/BLINK')
 from tqdm import tqdm
 import logging
 import torch
@@ -23,10 +23,12 @@ from blink.biencoder.data_process import (
     process_mention_data,
     get_candidate_representation,
 )
+from pytorch_transformers.tokenization_bert import BertTokenizer
 import blink.candidate_ranking.utils as utils
 from blink.crossencoder.train_cross import modify, evaluate
 from blink.crossencoder.data_process import prepare_crossencoder_data
 from blink.indexer.faiss_indexer import DenseFlatIndexer, DenseHNSWFlatIndexer
+from blink.crossencoder.mlp import MlpModel, load_mlp
 
 
 HIGHLIGHTS = [
@@ -241,23 +243,24 @@ def _run_biencoder(biencoder, dataloader, candidate_encoding, top_k=100, indexer
     all_scores = []
     for batch in tqdm(dataloader):
         context_input, _, label_ids = batch
+        context_input = context_input.to(device=biencoder.device)
         with torch.no_grad():
             if indexer is not None:
                 context_encoding = biencoder.encode_context(context_input).numpy()
                 context_encoding = np.ascontiguousarray(context_encoding)
                 scores, indicies = indexer.search_knn(context_encoding, top_k)
             else:
-                scores = biencoder.score_candidate(
+                scores, context_encoding = biencoder.score_candidate(
                     context_input, None, cand_encs=candidate_encoding  # .to(device)
                 )
-                scores, indicies = scores.topk(top_k)
+                scores, indicies = scores.topk(top_k)  ##top k search를 함
                 scores = scores.data.numpy()
                 indicies = indicies.data.numpy()
 
         labels.extend(label_ids.data.numpy())
         nns.extend(indicies)
         all_scores.extend(scores)
-    return labels, nns, all_scores
+    return labels, nns, all_scores, context_encoding
 
 
 def _process_crossencoder_dataloader(context_input, label_input, crossencoder_params):
@@ -270,11 +273,11 @@ def _process_crossencoder_dataloader(context_input, label_input, crossencoder_pa
 
 
 def _run_crossencoder(crossencoder, dataloader, logger, context_len, device="cuda"):
-    crossencoder.model.eval()
+    crossencoder.eval()
     accuracy = 0.0
     crossencoder.to(device)
 
-    res = evaluate(crossencoder, dataloader, device, logger, context_len, zeshel=False, silent=False)
+    res = evaluate(crossencoder, dataloader, device, logger, context_len, zeshel=False, silent=False) # evaluate
     accuracy = res["normalized_accuracy"]
     logits = res["logits"]
 
@@ -295,9 +298,9 @@ def load_models(args, logger=None):
         biencoder_params = json.load(json_file)
         biencoder_params["path_to_model"] = args.biencoder_model
     biencoder = load_biencoder(biencoder_params)
+    crossencoder_params = None
 
     crossencoder = None
-    crossencoder_params = None
     if not args.fast:
         # load crossencoder model
         if logger:
@@ -305,7 +308,7 @@ def load_models(args, logger=None):
         with open(args.crossencoder_config) as json_file:
             crossencoder_params = json.load(json_file)
             crossencoder_params["path_to_model"] = args.crossencoder_model
-        crossencoder = load_crossencoder(crossencoder_params)
+        crossencoder = load_mlp(crossencoder_params)
 
     # load candidate entities
     if logger:
@@ -425,7 +428,7 @@ def run(
         if logger:
             logger.info("run biencoder")
         top_k = args.top_k
-        labels, nns, scores = _run_biencoder(
+        labels, nns, scores, context_encoding = _run_biencoder(
             biencoder, dataloader, candidate_encoding, top_k, faiss_indexer
         )
 
@@ -496,19 +499,22 @@ def run(
                     predictions,
                     scores,
                 )
-
         # prepare crossencoder data
-        context_input, candidate_input, label_input = prepare_crossencoder_data(
-            crossencoder.tokenizer, samples, labels, nns, id2title, id2text, keep_all,
-        )
+        # candidate input: (N, K, 1024)의 임베딩된 값
+        # context input: (N, 1024)의 임베딩된 값
 
+        context_input, candidate_input, label_input = prepare_crossencoder_data(
+            candidate_encoding, crossencoder.tokenizer, samples, labels, nns, id2title, id2text, keep_all,
+            )
+        context_input=context_encoding
+         # 형태에 맞게 token들 재배치
         context_input = modify(
-            context_input, candidate_input, crossencoder_params["max_seq_length"]
-        )
+            context_input, candidate_input
+        ) # context와 candidate 합침
 
         dataloader = _process_crossencoder_dataloader(
             context_input, label_input, crossencoder_params
-        )
+        ) #context input은 제대로 올라갔음
 
         # run crossencoder and get accuracy
         accuracy, index_array, unsorted_scores = _run_crossencoder(
@@ -516,7 +522,7 @@ def run(
             dataloader,
             logger,
             context_len=biencoder_params["max_context_length"],
-        )
+        ) #crossencoder 돌리는 부분
 
         if args.interactive:
 

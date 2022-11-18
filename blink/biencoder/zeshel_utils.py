@@ -9,8 +9,7 @@
 import json
 import torch
 
-DOC_PATH = "/private/home/ledell/zeshel/data/documents/"
-
+DOC_PATH = "/home/jongsong/BLINK/data/zeshel/documents/"
 WORLDS = [
     'american_football',
     'doctor_who',

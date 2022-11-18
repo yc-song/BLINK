@@ -14,12 +14,14 @@ from collections import OrderedDict
 from tqdm import tqdm
 from pytorch_transformers.modeling_utils import CONFIG_NAME, WEIGHTS_NAME
 
-from pytorch_transformers.modeling_bert import (
-    BertPreTrainedModel,
-    BertConfig,
-    BertModel,
+# from blink.crossencoder.modeling_bert import (
+#     BertPreTrainedModel,
+#     BertConfig,
+#     BertModel,
+# )
+from blink.crossencoder.mlp import (
+    MlpModel,
 )
-
 from pytorch_transformers.modeling_roberta import (
     RobertaConfig,
     RobertaModel,
@@ -42,11 +44,11 @@ def load_crossencoder(params):
 class CrossEncoderModule(torch.nn.Module):
     def __init__(self, params, tokenizer):
         super(CrossEncoderModule, self).__init__()
-        model_path = params["bert_model"]
-        if params.get("roberta"):
-            encoder_model = RobertaModel.from_pretrained(model_path)
-        else:
-            encoder_model = BertModel.from_pretrained(model_path)
+        # model_path = params["bert_model"]
+        # if params.get("roberta"):
+            # encoder_model = RobertaModel.from_pretrained(model_path)
+        # else:
+        encoder_model = MlpModel()
         encoder_model.resize_token_embeddings(len(tokenizer))
         self.encoder = BertEncoder(
             encoder_model,
@@ -86,11 +88,7 @@ class CrossEncoderRanker(torch.nn.Module):
                 ENT_TITLE_TAG,
             ],
         }
-        self.tokenizer.add_special_tokens(special_tokens_dict)
-        self.NULL_IDX = self.tokenizer.pad_token_id
-        self.START_TOKEN = self.tokenizer.cls_token
-        self.END_TOKEN = self.tokenizer.sep_token
-        
+
         # init model
         self.build_model()
         if params["path_to_model"] is not None:

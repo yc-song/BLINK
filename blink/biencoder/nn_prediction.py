@@ -55,12 +55,22 @@ def get_topk_predictions(
     oid = 0
     for step, batch in enumerate(iter_):
         batch = tuple(t.to(device) for t in batch)
-        context_input, _, srcs, label_ids = batch
-        src = srcs[0].item()
-        scores = reranker.score_candidate(
+        if is_zeshel:
+            context_input, _, srcs, label_ids = batch
+        else:
+            context_input, _, label_ids = batch
+            srcs = torch.tensor([0] * context_input.size(0), device=device)
+        if len(batch)==4:
+            context_input, _, srcs, label_ids = batch
+            src = srcs[0].item()
+        elif len(batch) == 3:
+            context_input, _, label_ids = batch
+            src = 0
+        cand_encode_list[src] = cand_encode_list[src].to(device)
+        scores, embedding_ctxt = reranker.score_candidate(
             context_input, 
             None, 
-            cand_encs=cand_encode_list[src].to(device)
+            cand_encs=cand_encode_list[src]
         )
         values, indicies = scores.topk(top_k)
         old_src = src
@@ -71,7 +81,7 @@ def get_topk_predictions(
             if srcs[i] != old_src:
                 src = srcs[i].item()
                 # not the same domain, need to re-do
-                new_scores = reranker.score_candidate(
+                new_scores, embedding_ctxt = reranker.score_candidate(
                     context_input[[i]], 
                     None,
                     cand_encs=cand_encode_list[src].to(device)
@@ -93,12 +103,12 @@ def get_topk_predictions(
                 continue
 
             # add examples in new_data
-            cur_candidates = candidate_pool[src][inds]
-            nn_context.append(context_input[i].cpu().tolist())
+            cand_encode_list[srcs[i].item()]=cand_encode_list[srcs[i].item()].to(device)
+            cur_candidates = cand_encode_list[srcs[i].item()][inds]
+            nn_context.append(embedding_ctxt[i].cpu().tolist())
             nn_candidates.append(cur_candidates.cpu().tolist())
             nn_labels.append(pointer)
             nn_worlds.append(src)
-
     res = Stats(top_k)
     for src in range(world_size):
         if stats[src].cnt == 0:
@@ -111,8 +121,8 @@ def get_topk_predictions(
 
     logger.info(res.output())
 
-    nn_context = torch.LongTensor(nn_context)
-    nn_candidates = torch.LongTensor(nn_candidates)
+    nn_context = torch.FloatTensor(nn_context)
+    nn_candidates = torch.FloatTensor(nn_candidates)
     nn_labels = torch.LongTensor(nn_labels)
     nn_data = {
         'context_vecs': nn_context,

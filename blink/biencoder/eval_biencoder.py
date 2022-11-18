@@ -11,7 +11,8 @@ import logging
 import os
 import torch
 from tqdm import tqdm
-
+import sys
+sys.path.append('/home/jongsong/BLINK')
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 
 from pytorch_transformers.tokenization_bert import BertTokenizer
