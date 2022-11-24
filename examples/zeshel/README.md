@@ -21,7 +21,7 @@ Get top-64 predictions from Biencoder model on train, valid and test dataset:
 
 - for train dataset
 
-    '''
+    '''bash
     python blink/biencoder/eval_biencoder.py --path_to_model models/zeshel/biencoder/pytorch_model.bin \
     --data_path data/zeshel/blink_format --output_path models/zeshel --encode_batch_size 128 --eval_batch_size 1 \
     --top_k 64 --save_topk_result --bert_model bert-large-uncased --mode train --zeshel True --data_parallel \
@@ -30,7 +30,7 @@ Get top-64 predictions from Biencoder model on train, valid and test dataset:
     
 - for valid dataset
 
-  '''
+  '''bash
   python blink/biencoder/eval_biencoder.py --path_to_model models/zeshel/biencoder/pytorch_model.bin \
   --data_path data/zeshel/blink_format --output_path models/zeshel --encode_batch_size 128 --eval_batch_size 1 \
   --top_k 64 --save_topk_result --bert_model bert-large-uncased --mode valid --zeshel True --data_parallel \
@@ -39,7 +39,7 @@ Get top-64 predictions from Biencoder model on train, valid and test dataset:
   
 - for test dataset
   
-  '''
+  '''bash
   python blink/biencoder/eval_biencoder.py --path_to_model models/zeshel/biencoder/pytorch_model.bin \
   --data_path data/zeshel/blink_format --output_path models/zeshel --encode_batch_size 128 --eval_batch_size 1 \
   --top_k 64 --save_topk_result --bert_model bert-large-uncased --mode test --zeshel True --data_parallel \
