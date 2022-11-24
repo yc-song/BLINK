@@ -19,13 +19,7 @@ Train Biencoder model. Note: the following command requires to run on 8 GPUs wit
 
 Get top-64 predictions from Biencoder model on train, valid and test dataset:
 
-    python blink/biencoder/eval_biencoder.py \
-      --path_to_model models/zeshel/biencoder/pytorch_model.bin \
-      --data_path data/zeshel/blink_format \
-      --output_path models/zeshel \
-      --encode_batch_size 8 --eval_batch_size 1 --top_k 64 --save_topk_result \
-      --bert_model bert-large-uncased --mode train,valid,test \
-      --zeshel True --data_parallel
+    python blink/biencoder/eval_biencoder.py --path_to_model models/zeshel/biencoder/pytorch_model.bin --data_path data/zeshel/blink_format --output_path models/zeshel --encode_batch_size 128 --eval_batch_size 1 --top_k 64 --save_topk_result --bert_model bert-large-uncased --mode train --zeshel True --data_parallel --cand_encode_path data/zeshel/cand_enc/cand_enc_train.pt --cand_pool_path data/zeshel/cand_pool/cand_pool_train.pt
 
 Train and eval crossencoder model:
 
