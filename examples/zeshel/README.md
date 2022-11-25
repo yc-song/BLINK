@@ -51,8 +51,7 @@ Train and eval crossencoder model:
 
     python blink/crossencoder/train_cross.py \
       --data_path  models/zeshel/top64_candidates/ \
-      --output_path models/zeshel/crossencoder \
       --learning_rate 1e-03 --num_train_epochs 5 --max_context_length 128 --max_cand_length 128 \
       --train_batch_size 2 --eval_batch_size 2 \
       --type_optimization all_encoder_layers --add_linear --data_parallel \
-      --zeshel True
+      --zeshel True --output_path models/zeshel/crossencoder --image_path test0
