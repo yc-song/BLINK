@@ -47,6 +47,7 @@ Get top-64 predictions from Biencoder model on train, valid and test dataset:
   ```
 
 Train and eval crossencoder model:
+(NOTE: change output_path for different conditions)
 
     python blink/crossencoder/train_cross.py \
       --data_path  models/zeshel/top64_candidates/ \
