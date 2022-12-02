@@ -97,6 +97,8 @@ def get_topk_predictions(
             stats[src].add(pointer)
 
             if pointer == -1:
+                # pointer = j + 1
+
                 continue
 
             if not save_predictions:

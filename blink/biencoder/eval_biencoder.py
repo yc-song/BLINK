@@ -42,7 +42,6 @@ def load_entity_dict(logger, params, is_zeshel):
             entity_list.append((title, text))
             if params["debug"] and len(entity_list) > 200:
                 break
-
     return entity_list
 
 
@@ -106,7 +105,6 @@ def get_candidate_pool_tensor(
         else:
             title = None
             entity_text = entity_desc
-
         rep = data.get_candidate_representation(
                 entity_text, 
                 tokenizer, 
@@ -130,9 +128,10 @@ def encode_candidate(
     if is_zeshel:
         src = 0
         cand_encode_dict = {}
+        cand_cls_dict={}
         for src, cand_pool in candidate_pool.items():
             logger.info("Encoding candidate pool %s" % WORLDS[src])
-            cand_pool_encode = encode_candidate(
+            cand_pool_encode, cand_pool_cls = encode_candidate(
                 reranker,
                 cand_pool,
                 encode_batch_size,
@@ -141,7 +140,8 @@ def encode_candidate(
                 is_zeshel=False,
             )
             cand_encode_dict[src] = cand_pool_encode
-        return cand_encode_dict
+            cand_cls_dict[src]= cand_pool_cls
+        return cand_encode_dict, cand_cls_dict
         
     reranker.model.eval()
     device = reranker.device
@@ -155,16 +155,20 @@ def encode_candidate(
         iter_ = tqdm(data_loader)
 
     cand_encode_list = None
+    cand_cls_list = None
     for step, batch in enumerate(iter_):
         cands = batch
         cands = cands.to(device)
-        cand_encode = reranker.encode_candidate(cands)
+        cand_encode, cand_cls = reranker.encode_candidate(cands)
         if cand_encode_list is None:
             cand_encode_list = cand_encode
         else:
-            cand_encode_list = torch.cat((cand_encode_list, cand_encode))
-
-    return cand_encode_list
+            cand_encode_list = torch.cat((cand_encode_list, cand_encode), dim=0)
+        if cand_cls_list is None:
+            cand_cls_list = cand_cls
+        else:
+            cand_cls_list = torch.cat((cand_cls_list, cand_cls), dim=0)
+    return cand_encode_list, cand_cls_list
 
 
 def load_or_generate_candidate_pool(
@@ -185,7 +189,7 @@ def load_or_generate_candidate_pool(
             logger.info("Loading failed. Generating candidate pool")
 
     if candidate_pool is None:
-        # compute candidate pool from entity list
+        #compute candidate pool from entity list
         entity_desc_list = load_entity_dict(logger, params, is_zeshel)
         candidate_pool = get_candidate_pool_tensor_helper(
             entity_desc_list,
@@ -216,6 +220,8 @@ def main(params):
     device = reranker.device
     
     cand_encode_path = params.get("cand_encode_path", None)
+    cand_cls_path = params.get("cand_cls_path", None)
+
     
     # candidate encoding is not pre-computed. 
     # load/generate candidate pool to compute candidate encoding.
@@ -226,7 +232,7 @@ def main(params):
         logger,
         cand_pool_path,
     )       
-
+    candidate_cls=None
     candidate_encoding = None
     if cand_encode_path is not None:
         # try to load candidate encoding from path
@@ -234,11 +240,12 @@ def main(params):
         try:
             logger.info("Loading pre-generated candidate encode path.")
             candidate_encoding = torch.load(cand_encode_path)
+            candidate_cls=torch.load(cand_cls_path)
         except:
             logger.info("Loading failed. Generating candidate encoding.")
 
     if candidate_encoding is None:
-        candidate_encoding = encode_candidate(
+        candidate_encoding, candidate_cls = encode_candidate(
             reranker,
             candidate_pool,
             params["encode_batch_size"],
@@ -252,6 +259,7 @@ def main(params):
             # Save candidate encoding to avoid re-compute
             logger.info("Saving candidate encoding to file " + cand_encode_path)
             torch.save(candidate_encoding, cand_encode_path)
+            torch.save(candidate_cls, cand_cls_path)
 
 
     test_samples = utils.read_dataset(params["mode"], params["data_path"])
@@ -282,6 +290,7 @@ def main(params):
         candidate_encoding,
         params["silent"],
         logger,
+        candidate_cls,
         params["top_k"],
         params.get("zeshel", None),
         save_results,

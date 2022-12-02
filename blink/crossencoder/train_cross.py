@@ -15,21 +15,20 @@ import random
 import time
 import numpy as np
 import sys
-sys.path.append('/home/jongsong/BLINK')
+sys.path.append('.')
 from multiprocessing.pool import ThreadPool
 from torch import optim
 from tqdm import tqdm, trange
 from collections import OrderedDict
 
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
-
 from pytorch_transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from pytorch_transformers.optimization import WarmupLinearSchedule
 from pytorch_transformers.tokenization_bert import BertTokenizer
-
 import blink.candidate_retrieval.utils
 from blink.crossencoder.crossencoder import CrossEncoderRanker, load_crossencoder
 import logging
+import wandb
 
 import blink.candidate_ranking.utils as utils
 import blink.biencoder.data_process as data
@@ -37,30 +36,34 @@ from blink.biencoder.zeshel_utils import DOC_PATH, WORLDS, world_to_id
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import BlinkParser
 from blink.crossencoder.mlp import MlpModel
-
+# from pytorch_lightning.callbacks import EarlyStopping
+import matplotlib.pyplot as plt
 logger = None
 
-
 def modify(context_input, candidate_input):
-    new_input = []
-    context_input = context_input.tolist()
-    candidate_input = candidate_input.tolist()
+    # print(context_input.shape)
+    # print(candidate_input.shape)
+    context_input=context_input.unsqueeze(dim=1).expand(-1,64,-1)
+    new_input=torch.cat((context_input,candidate_input),dim=2)
+    # new_input = []
+    # context_input = context_input.tolist()
+    # candidate_input = candidate_input.tolist()
 
-    for i in range(len(context_input)):
-        cur_input = context_input[i]
-        cur_candidate = candidate_input[i]
-        mod_input = []
-        for j in range(len(cur_candidate)):
-            sample = cur_input + cur_candidate[j]
-            mod_input.append(sample)
+    # for i in range(len(context_input)):
+    #     cur_input = context_input[i]
+    #     cur_candidate = candidate_input[i]
+    #     mod_input = []
+    #     for j in range(len(cur_candidate)):
+    #         sample = cur_input + cur_candidate[j]
+    #         mod_input.append(sample)
 
-        new_input.append(mod_input)
-    new_input=torch.FloatTensor(new_input)
-
+    #     new_input.append(mod_input)
+    # new_input=torch.FloatTensor(new_input)
+    # print(new_input.shape)
     return new_input
 
 
-def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=False, silent=True):
+def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=False, silent=True, train=True):
     reranker.eval()
     if silent:
         iter_ = eval_dataloader
@@ -72,7 +75,8 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=F
     eval_accuracy = 0.0
     nb_eval_examples = 0
     nb_eval_steps = 0
-
+    eval_recall=0
+    
     acc = {}
     tot = {}
     world_size = len(WORLDS)
@@ -156,14 +160,18 @@ def get_scheduler(params, optimizer, len_train_data, logger):
 
 
 def main(params):
+    nested_break=False
+    wandb.init(project=params["wandb"], config=parser)
     model_output_path = params["output_path"]
     if not os.path.exists(model_output_path):
         os.makedirs(model_output_path)
     logger = utils.get_logger(params["output_path"])
 
     # Init model
-    reranker= MlpModel(params)
-    # reranker = CrossEncoderRanker(params)
+    if params["bert_model"]=="mlp":
+        reranker= MlpModel(params)
+    else:
+        reranker = CrossEncoderRanker(params)
     tokenizer = reranker.tokenizer
     model = reranker.model
 
@@ -171,7 +179,6 @@ def main(params):
 
     device = reranker.device
     n_gpu = reranker.n_gpu
-
     if params["gradient_accumulation_steps"] < 1:
         raise ValueError(
             "Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
@@ -200,12 +207,14 @@ def main(params):
     context_length = params["max_context_length"]
     
     fname = os.path.join(params["data_path"], "test.t7")
+    # fname2 = os.path.join(params["data_path"], "train2.t7")
     train_data = torch.load(fname)
-    context_input = train_data["context_vecs"]
+    torch.set_printoptions(threshold=10_000)
+    context_input = train_data["context_vecs"][:params["train_size"]]
     # print("train context", context_input.shape) 
-    candidate_input = train_data["candidate_vecs"]
+    candidate_input = train_data["candidate_vecs"][:params["train_size"]]
     # print("train candidate", candidate_input.shape)
-    label_input = train_data["labels"]
+    label_input = train_data["labels"][:params["train_size"]]
 
     if params["debug"]:
         max_n = 200
@@ -215,7 +224,7 @@ def main(params):
 
     context_input = modify(context_input, candidate_input)
     if params["zeshel"]:
-        src_input = train_data['worlds'][:]
+        src_input = train_data['worlds'][:params["train_size"]]
         train_tensor_data = TensorDataset(context_input, label_input, src_input)
     else:
         train_tensor_data = TensorDataset(context_input, label_input)
@@ -228,9 +237,9 @@ def main(params):
     )
     fname = os.path.join(params["data_path"], "valid.t7")
     valid_data = torch.load(fname)
-    context_input = valid_data["context_vecs"]
-    candidate_input = valid_data["candidate_vecs"]
-    label_input = valid_data["labels"]
+    context_input = valid_data["context_vecs"][:params["valid_size"]]
+    candidate_input = valid_data["candidate_vecs"][:params["valid_size"]]
+    label_input = valid_data["labels"][:params["valid_size"]]
     if params["debug"]:
         max_n = 200
         context_input = context_input[:max_n]
@@ -241,7 +250,7 @@ def main(params):
     context_input = modify(context_input, candidate_input)
     # print("valid modify", context_input.shape)
     if params["zeshel"]:
-        src_input = valid_data["worlds"][:]
+        src_input = valid_data["worlds"][:params["valid_size"]]
         valid_tensor_data = TensorDataset(context_input, label_input, src_input)
     else:
         valid_tensor_data = TensorDataset(context_input, label_input)
@@ -276,28 +285,42 @@ def main(params):
     logger.info(
         "device: {} n_gpu: {}, distributed training: {}".format(device, n_gpu, False)
     )
-
-    optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
+    # optimizer = optim.SGD(model.parameters(), momentum=0.9, lr=params["learning_rate"])
+    if params["optimizer"]=="Adam":
+        optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
+    elif params["optimizer"]=="SGD":
+        optimizer = optim.SGD(model.parameters(), momentum=0.9, lr=params["learning_rate"])
+    
+    # optimizer = optim.SGD(model.parameters(), momentum=0.9, lr=params["learning_rate"])
+    
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=1)
 
     model.train()
 
     best_epoch_idx = -1
     best_score = -1
-
+    #Early stopping variables
+    patience=params["patience"]
+    last_acc=1
+    trigger_times=-1
     num_train_epochs = params["num_train_epochs"]
-
     for epoch_idx in trange(int(num_train_epochs), desc="Epoch"):
         tr_loss = 0
+        val_acc=0
+        val_loss_sum=0
         results = None
 
         if params["silent"]:
             iter_ = train_dataloader
         else:
             iter_ = tqdm(train_dataloader, desc="Batch")
+            iter_valid = valid_dataloader
 
         part = 0
+        model.train()
+
         for step, batch in enumerate(iter_):
+            model.train()
             batch = tuple(t.to(device) for t in batch)
             # print(batch)
             # print(batch[0].shape)
@@ -313,15 +336,65 @@ def main(params):
                 loss = loss / grad_acc_steps
 
             tr_loss += loss.item()
-
-            if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
+            # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
+            if (step+1)%(params["print_interval"]*grad_acc_steps)==0 :
+                
                 logger.info(
-                    "Step {} - epoch {} average loss: {}\n".format(
+                    "Step {} - epoch {} average training loss: {}\n".format(
                         step,
                         epoch_idx,
                         tr_loss / (params["print_interval"] * grad_acc_steps),
                     )
                 )
+                for step, batch in enumerate(iter_valid):
+                    model.eval()
+                    batch = tuple(t.to(device) for t in batch)
+                    context_input = batch[0] 
+                    label_input = batch[1]
+                    val_loss, _ = reranker(context_input, label_input, context_length)
+                                # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
+                    val_loss_sum += val_loss.item()
+                    
+                    if (step + 1) == (len(iter_)):
+                        
+                        logger.info(
+                            "Step {} - epoch {} average validation loss: {}\n".format(
+                                step,
+                                epoch_idx,
+                                val_loss_sum / (params["print_interval"] * grad_acc_steps),
+                            )
+                        )
+                logger.info("Evaluation on the training dataset")
+                train_acc=evaluate(
+                    reranker,
+                    train_dataloader,
+                    device=device,
+                    logger=logger,
+                    context_length=context_length,
+                    zeshel=params["zeshel"],
+                    silent=params["silent"],
+                )
+                
+                logger.info("Evaluation on the development dataset")
+                val_acc=evaluate(
+                    reranker,
+                    valid_dataloader,
+                    device=device,
+                    logger=logger,
+                    context_length=context_length,
+                    zeshel=params["zeshel"],
+                    silent=params["silent"],
+                    train=False
+                )
+                
+
+                wandb.log({
+                    "train_loss":tr_loss / (params["print_interval"] * grad_acc_steps),
+                    "val_loss":val_loss_sum / (len(iter_) * grad_acc_steps),
+                    "train_acc": train_acc["normalized_accuracy"],
+                    "val_acc":val_acc["normalized_accuracy"]
+                    })
+                val_loss_sum = 0
                 tr_loss = 0
 
             loss.backward()
@@ -334,32 +407,83 @@ def main(params):
                 scheduler.step()
                 optimizer.zero_grad()
 
-            if (step + 1) % (params["eval_interval"] * grad_acc_steps) == 0:
-                logger.info("Evaluation on the development dataset")
-                evaluate(
-                    reranker,
-                    valid_dataloader,
-                    device=device,
-                    logger=logger,
-                    context_length=context_length,
-                    zeshel=params["zeshel"],
-                    silent=params["silent"],
-                )
-                logger.info("***** Saving fine - tuned model *****")
-                epoch_output_folder_path = os.path.join(
-                    model_output_path, "epoch_{}_{}".format(epoch_idx, part)
-                )
-                part += 1
-                # utils.save_model(model, tokenizer, epoch_output_folder_path)
-                model.train()
-                logger.info("\n")
+            # if (step+1)%(params["print_interval"]*grad_acc_steps) == 0:
+            #     logger.info("Evaluation on the training dataset")
+            #     train_acc=evaluate(
+            #         reranker,
+            #         train_dataloader,
+            #         device=device,
+            #         logger=logger,
+            #         context_length=context_length,
+            #         zeshel=params["zeshel"],
+            #         silent=params["silent"],
+            #     )
+                
+            #     logger.info("Evaluation on the development dataset")
+            #     val_acc=evaluate(
+            #         reranker,
+            #         valid_dataloader,
+            #         device=device,
+            #         logger=logger,
+            #         context_length=context_length,
+            #         zeshel=params["zeshel"],
+            #         silent=params["silent"],
+            #         train=False
+            #     )
+                
+            #     wandb.log({"train_acc":train_acc['normalized_accuracy'], "val_acc":val_acc['normalized_accuracy']})
 
+            #     # for step, batch in enumerate(iter_valid):
+            #     #     model.eval()
+            #     #     context_input = batch[0] 
+            #     #     label_input = batch[1]
+            #     #     loss, _ = reranker(context_input, label_input, context_length)
+            #     #     if grad_acc_steps > 1:
+            #     #         loss = loss / grad_acc_steps
+
+            #     #     val_loss += loss.item()
+
+            #     #     if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
+            #     #         logger.info(
+            #     #             "Step {} - epoch {} average val loss: {}\n".format(
+            #     #                 step,
+            #     #                 epoch_idx,
+            #     #                 val_loss / (params["print_interval"] * grad_acc_steps),
+            #     #             )
+            #     #         )
+
+            #     if (val_acc["normalized_accuracy"]<last_acc):
+            #         trigger_times+=1
+            #         print("trigger_times", trigger_times)
+            #         if (trigger_times>patience):
+            #             print("Early stopping")
+            #             # if params["save"]:
+            #                 # reranker.save_model(epoch_output_folder_path)
+            #             nested_break=True
+            #             break
+            #     else:
+            #         print("valid accuracy got better")
+            #         trigger_times=0
+            #     last_acc=val_acc["normalized_accuracy"]
+
+            #     # logger.info("***** Saving fine - tuned model *****")
+            #     # if (params["save"]):
+            #     #     epoch_output_folder_path = os.path.join(
+            #     #         model_output_path, "epoch_{}_{}".format(epoch_idx, part)
+            #     #     )
+            #     #     part += 1
+            #     #     # utils.save_model(model, tokenizer, epoch_output_folder_path)
+            #     #     torch.save(model.state_dict(), epoch_output_folder_path)
+            #     # reranker.save_model(epoch_output_folder_path)
+            #     model.train()
+            #     logger.info("\n")
+    
         logger.info("***** Saving fine - tuned model *****")
         epoch_output_folder_path = os.path.join(
             model_output_path, "epoch_{}".format(epoch_idx)
         )
         # utils.save_model(model, tokenizer, epoch_output_folder_path)
-        # reranker.save(epoch_output_folder_path)
+        # reranker.save_model(epoch_output_folder_path)
 
         output_eval_file = os.path.join(epoch_output_folder_path, "eval_results.txt")
         results = evaluate(
@@ -379,6 +503,9 @@ def main(params):
         best_epoch_idx = li[np.argmax(ls)]
         logger.info("\n")
 
+        if nested_break==True:
+            break
+
     execution_time = (time.time() - time_start) / 60
     utils.write_to_file(
         os.path.join(model_output_path, "training_time.txt"),
@@ -386,11 +513,15 @@ def main(params):
     )
     logger.info("The training took {} minutes\n".format(execution_time))
 
+
     # save the best model in the parent_dir
-    logger.info("Best performance in epoch: {}".format(best_epoch_idx))
-    params["path_to_model"] = os.path.join(
-        model_output_path, "epoch_{}".format(best_epoch_idx)
-    )
+    if (params["save"]):
+        logger.info("Best performance in epoch: {}".format(best_epoch_idx))
+        params["path_to_model"] = os.path.join(
+            model_output_path, "epoch_{}".format(best_epoch_idx)
+        )
+        torch.save(model.state_dict(), epoch_output_folder_path)
+
 
 
 if __name__ == "__main__":
@@ -403,4 +534,5 @@ if __name__ == "__main__":
     print(args)
 
     params = args.__dict__
+
     main(params)

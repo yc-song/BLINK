@@ -39,6 +39,7 @@ class BiEncoderModule(torch.nn.Module):
             params["out_dim"],
             layer_pulled=params["pull_from_layer"],
             add_linear=params["add_linear"],
+
         )
         self.cand_encoder = BertEncoder(
             cand_bert,
@@ -58,16 +59,18 @@ class BiEncoderModule(torch.nn.Module):
         mask_cands,
     ):
         embedding_ctxt = None
+        cls_ctxt=None
         if token_idx_ctxt is not None:
-            embedding_ctxt = self.context_encoder(
+            embedding_ctxt, cls_ctxt = self.context_encoder(
                 token_idx_ctxt, segment_idx_ctxt, mask_ctxt
             )
         embedding_cands = None
+        cls_cands=None
         if token_idx_cands is not None:
-            embedding_cands = self.cand_encoder(
-                token_idx_cands, segment_idx_cands, mask_cands
+            embedding_cands, cls_cands = self.cand_encoder(
+                token_idx_cands, segment_idx_cands, mask_cands, data_type="candidate"
             )
-        return embedding_ctxt, embedding_cands
+        return embedding_ctxt, embedding_cands, cls_ctxt, cls_cands
 
 
 class BiEncoderRanker(torch.nn.Module):
@@ -116,7 +119,7 @@ class BiEncoderRanker(torch.nn.Module):
         model_to_save.config.to_json_file(output_config_file)
 
     def get_optimizer(self, optim_states=None, saved_optim_type=None):
-        return get_bert_optimizer(
+        return get_bert_optimizer(''
             [self.model],
             self.params["type_optimization"],
             self.params["learning_rate"],
@@ -127,7 +130,7 @@ class BiEncoderRanker(torch.nn.Module):
         token_idx_cands, segment_idx_cands, mask_cands = to_bert_input(
             cands, self.NULL_IDX
         )
-        embedding_context, _ = self.model(
+        embedding_context, _, _, _ = self.model(
             token_idx_cands, segment_idx_cands, mask_cands, None, None, None
         )
         return embedding_context.cpu().detach()
@@ -136,10 +139,10 @@ class BiEncoderRanker(torch.nn.Module):
         token_idx_cands, segment_idx_cands, mask_cands = to_bert_input(
             cands, self.NULL_IDX
         )
-        _, embedding_cands = self.model(
+        _, embedding_cands, _, cls_cands = self.model(
             None, None, None, token_idx_cands, segment_idx_cands, mask_cands
         )
-        return embedding_cands.cpu().detach()
+        return embedding_cands.cpu().detach(), cls_cands.cpu().detach()
         # TODO: why do we need cpu here?
         # return embedding_cands
 
@@ -149,38 +152,39 @@ class BiEncoderRanker(torch.nn.Module):
         self,
         text_vecs,
         cand_vecs,
-        random_negs=True,
+        random_negs=False,
         cand_encs=None,  # pre-computed candidate encoding.
+        cand_cls=None
     ):
         # Encode contexts first
         token_idx_ctxt, segment_idx_ctxt, mask_ctxt = to_bert_input(
             text_vecs, self.NULL_IDX
         )
-        embedding_ctxt, _ = self.model(
+        embedding_ctxt, _, cls_ctxt, _ = self.model(
             token_idx_ctxt, segment_idx_ctxt, mask_ctxt, None, None, None
         )
 
         # Candidate encoding is given, do not need to re-compute
         # Directly return the score of context encoding and candidate encoding
         if cand_encs is not None:
-            scores=embedding_ctxt.mm(cand_encs.t())  
+            scores=cls_ctxt.mm(cand_cls.t())  
             return scores, embedding_ctxt
 
         # Train time. We compare with all elements of the batch
         token_idx_cands, segment_idx_cands, mask_cands = to_bert_input(
             cand_vecs, self.NULL_IDX
         )
-        _, embedding_cands = self.model(
+        _, embedding_cands, _, cls_cands = self.model(
             None, None, None, token_idx_cands, segment_idx_cands, mask_cands
         )
         if random_negs:
             # train on random negatives
-            scores=embedding_ctxt.mm(embedding_cands.t())
+            scores=cls_ctxt.mm(cand_cls.t())
         else:
             # train on hard negatives
             embedding_ctxt = embedding_ctxt.unsqueeze(1)  # batchsize x 1 x embed_size
             embedding_cands = embedding_cands.unsqueeze(2)  # batchsize x embed_size x 2
-            scores = torch.bmm(embedding_ctxt, embedding_cands)  # batchsize x 1 x 1
+            scores = torch.bmm(cls_ctxt, cls_cands)  # batchsize x 1 x 1
             scores = torch.squeeze(scores)
         return scores, embedding_ctxt
 
@@ -189,11 +193,11 @@ class BiEncoderRanker(torch.nn.Module):
     def forward(self, context_input, cand_input, label_input=None):
         flag = label_input is None
         scores = self.score_candidate(context_input, cand_input, flag)
-        bs = scores.size(0)
+        bs = scores[0].size(0)
         if label_input is None:
             target = torch.LongTensor(torch.arange(bs))
             target = target.to(self.device)
-            loss = F.cross_entropy(scores, target, reduction="mean")
+            loss = F.cross_entropy(scores[0], target, reduction="mean")
         else:
             loss_fct = nn.BCEWithLogitsLoss(reduction="mean")
             # TODO: add parameters?

@@ -62,7 +62,6 @@ def get_context_representation(
     padding = [0] * (max_seq_length - len(input_ids))
     input_ids += padding
     assert len(input_ids) == max_seq_length
-
     return {
         "tokens": context_tokens,
         "ids": input_ids,
@@ -82,7 +81,6 @@ def get_candidate_representation(
     if candidate_title is not None:
         title_tokens = tokenizer.tokenize(candidate_title)
         cand_tokens = title_tokens + [title_tag] + cand_tokens
-
     cand_tokens = cand_tokens[: max_seq_length - 2]
     cand_tokens = [cls_token] + cand_tokens + [sep_token]
 

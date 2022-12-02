@@ -28,11 +28,14 @@ def read_dataset(dataset_name, preprocessed_json_data_parent_folder, debug=False
     samples = []
 
     with io.open(txt_file_path, mode="r", encoding="utf-8") as file:
-        for line in file:
+        for i, line in enumerate(file):
+            # if i<20000:
+            #     samples.append(json.loads(line.strip()))
+            #     if debug and len(samples) > 200:
+            #         break
             samples.append(json.loads(line.strip()))
             if debug and len(samples) > 200:
                 break
-
     return samples
 
 
@@ -86,7 +89,6 @@ def eval_precision_bm45_dataloader(dataloader, ks=[1, 5, 10], number_of_samples=
 def accuracy(out, labels):
     outputs = np.argmax(out, axis=1)
     return np.sum(outputs == labels), outputs == labels
-
 
 def remove_module_from_state_dict(state_dict):
     new_state_dict = OrderedDict()

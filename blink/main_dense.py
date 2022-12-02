@@ -7,7 +7,7 @@
 import argparse
 import json
 import sys
-sys.path.append('/home/jongsong/BLINK')
+sys.path.append('/mnt/f/BLINK')
 from tqdm import tqdm
 import logging
 import torch

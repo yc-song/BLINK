@@ -11,7 +11,7 @@ import os
 import time
 import torch
 import sys
-sys.path.append('/home/jongsong/BLINK')
+sys.path.append('/mnt/f/BLINK')
 from blink.indexer.faiss_indexer import DenseFlatIndexer, DenseHNSWFlatIndexer
 import blink.candidate_ranking.utils as utils
 

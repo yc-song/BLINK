@@ -1,15 +1,20 @@
 import torch
 from torch import nn, optim
 import torch.nn.functional as F
-
+import os
 from pytorch_transformers import PreTrainedModel, PretrainedConfig
 from pytorch_transformers.modeling_bert import (
     BertPreTrainedModel,
     BertConfig,
     BertModel,
 )
+import sys
+sys.path.append('/mnt/f/BLINK')
+from blink.common.ranker_base import get_model_obj
 from pytorch_transformers.tokenization_bert import BertTokenizer
 from pytorch_transformers.tokenization_roberta import RobertaTokenizer
+from blink.common.params import BlinkParser
+
 def load_mlp(params):
     # Init model
     crossencoder = MlpModel(params)
@@ -34,40 +39,66 @@ class MlpModel(nn.Module):
         self.model = torch.nn.DataParallel(self.model)
     def build_model(self):
         self.model=MlpModule(self.params)
+    def save_model(self, output_dir):
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        torch.save(self.model.state_dict(), output_dir)
+    def load_model(self, fname, cpu=False):
+        if cpu:
+            state_dict = torch.load(fname, map_location=lambda storage, location: "cpu")
+        else:
+            state_dict = torch.load(fname)
+        self.model.load_state_dict(state_dict)
     def forward(self, input, label_input, context_length):
         scores=torch.squeeze(self.model(input, label_input, context_length), dim=2)
         # print("label", label_input)
         # print("scores", scores)
         loss=F.cross_entropy(scores, label_input, reduction="mean")
+        torch.set_printoptions(threshold=10_000)
+        print(label_input)
         return loss, scores
 class MlpModule(nn.Module):
     def __init__(self,params, top_k=k, model_input=input):
         super(MlpModule, self).__init__()
+        self.params=params
         self.fc=nn.Linear(model_input, model_input)
         self.fc2=nn.Linear(model_input, 1)
+        self.fc_red1=nn.Linear(model_input, self.params["dim_red"])
+        self.fc_red2=nn.Linear(self.params["dim_red"], self.params["dim_red"])
+        self.fc_red3=nn.Linear(self.params["dim_red"],1)
         self.dropout=nn.Dropout(0.1)
         self.act_fn = nn.LeakyReLU()
-        self.mlp=nn.Sequential(
+        self.linear=nn.Sequential(
             self.dropout,
             self.fc,
             self.act_fn,
-            self.dropout,
-            self.fc,
-            self.act_fn,
-            self.dropout,
-            self.fc,
-            self.act_fn,
-            self.dropout,
-            self.fc,
-            self.act_fn,
-            self.dropout,
-            self.fc,
-            self.act_fn,
+        )
+        self.linear2=nn.Sequential(
             self.dropout,
             self.fc2
         )
+        self.linear_red1=nn.Sequential(
+            self.dropout,
+            self.fc_red1
+        )
+        self.linear_red2=nn.Sequential(
+            self.dropout,
+            self.fc_red2
+        )
+        self.linear_red3=nn.Sequential(
+            self.dropout,
+            self.fc_red3
+        )
     def forward(self, input, label_input, context_length):
-        return self.mlp(input)
+        if not self.params["dim_red"]:
+            for i in range(self.params["layers"]-1):
+                input=self.linear(input)
+            return self.linear2(input)
+        else:
+            input=self.linear_red1(input)
+            for i in range(self.params["layers"]-2):
+                input=self.linear_red2(input)
+            return self.linear_red3(input)
 # class BertPreTrainedModel(PreTrainedModel):
 #     """ An abstract class to handle weights initialization and
 #         a simple interface for dowloading and loading pretrained models.

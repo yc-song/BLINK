@@ -52,15 +52,12 @@ def load_entity_dict_zeshel(logger, params):
         src_id = world_to_id[src]
         with open(fname, 'rt') as f:
             for line in f:
-                line = line.rstrip()
-                item = json.loads(line)
-                text = item["text"]
-                doc_list.append(text[:256])
-
-                if params["debug"]:
-                    if len(doc_list) > 200:
-                        break
-
+                sample = json.loads(line.rstrip())
+                title = sample['title']
+                text = sample.get("text", "").strip()
+                doc_list.append((title, text))
+                if params["debug"] and len(doc_list) > 200:
+                    break
         logger.info("Load for world %s." % src)
         entity_dict[src_id] = doc_list
     return entity_dict

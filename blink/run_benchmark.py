@@ -7,7 +7,7 @@
 import argparse
 import prettytable
 import sys
-sys.path.append('/home/jongsong/BLINK')
+sys.path.append('/mnt/f/BLINK')
 import blink.main_dense as main_dense
 import blink.candidate_ranking.utils as utils
 

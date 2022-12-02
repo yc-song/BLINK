@@ -96,6 +96,12 @@ class BlinkParser(argparse.ArgumentParser):
         """
         parser = self.add_argument_group("Model Arguments")
         parser.add_argument(
+            "--layers",
+            default=6,
+            type=int,
+            help="number of layers for mlp structure",
+        )
+        parser.add_argument(
             "--max_seq_length",
             default=256,
             type=int,
@@ -163,6 +169,14 @@ class BlinkParser(argparse.ArgumentParser):
             required=True,
             help="The output directory where generated output file (model, etc.) is to be dumped.",
         )
+        parser.add_argument(
+            "--wandb",
+            default=None,
+            type=str,
+            help="wandb project name.",
+        )
+
+        
 
 
     def add_training_args(self, args=None):
@@ -197,7 +211,31 @@ class BlinkParser(argparse.ArgumentParser):
             help="Number of training epochs.",
         )
         parser.add_argument(
-            "--print_interval", type=int, default=10, 
+            "--dim_red",
+            default=0,
+            type=int,
+            help="first dimension",
+        )
+        parser.add_argument(
+            "--train_size",
+            default=10000,
+            type=int,
+            help="dataset size of train set",
+        )
+        parser.add_argument(
+            "--valid_size",
+            default=10000,
+            type=int,
+            help="dataset size of dev set",
+        )
+        parser.add_argument(
+            "--patience",
+            default=20,
+            type=int,
+            help="patience for early stopping.",
+        )
+        parser.add_argument(
+            "--print_interval", type=int, default=100, 
             help="Interval of loss printing",
         )
         parser.add_argument(
@@ -232,6 +270,23 @@ class BlinkParser(argparse.ArgumentParser):
         parser.add_argument(
             "--shuffle", type=bool, default=False, 
             help="Whether to shuffle train data",
+        )
+        parser.add_argument(
+            "--save", type=bool, default=True, 
+            help="directory to save models",
+        )
+        parser.add_argument(
+            "--image_path", type=str, default='0'
+        )
+        parser.add_argument(
+            "--dim", type=int, default=1024
+        )
+        parser.add_argument(
+            "--optimizer",
+            default="Adam",
+            type=str,
+            required=True,
+            help="optimizer.",
         )
 
     def add_eval_args(self, args=None):
@@ -272,3 +327,10 @@ class BlinkParser(argparse.ArgumentParser):
             type=str,
             help="Path for cached candidate encoding",
         )
+        parser.add_argument(
+            "--cand_cls_path",
+            default=None,
+            type=str,
+            help="Path for cached candidate cls encoding",
+        )
+

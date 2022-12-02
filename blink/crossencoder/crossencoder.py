@@ -14,11 +14,11 @@ from collections import OrderedDict
 from tqdm import tqdm
 from pytorch_transformers.modeling_utils import CONFIG_NAME, WEIGHTS_NAME
 
-# from blink.crossencoder.modeling_bert import (
-#     BertPreTrainedModel,
-#     BertConfig,
-#     BertModel,
-# )
+from blink.crossencoder.modeling_bert import (
+    BertPreTrainedModel,
+    BertConfig,
+    BertModel,
+)
 from blink.crossencoder.mlp import (
     MlpModel,
 )
@@ -44,11 +44,15 @@ def load_crossencoder(params):
 class CrossEncoderModule(torch.nn.Module):
     def __init__(self, params, tokenizer):
         super(CrossEncoderModule, self).__init__()
-        # model_path = params["bert_model"]
-        # if params.get("roberta"):
-            # encoder_model = RobertaModel.from_pretrained(model_path)
-        # else:
-        encoder_model = MlpModel()
+        model_path = params["bert_model"]
+        if params["bert_model"]=="mlp":         
+            encoder_model = MlpModel()
+        else: 
+            if params.get("roberta"):
+                encoder_model = RobertaModel.from_pretrained(model_path)
+            else:
+                encoder_model = BertModel.from_pretrained(model_path)
+
         encoder_model.resize_token_embeddings(len(tokenizer))
         self.encoder = BertEncoder(
             encoder_model,
@@ -144,6 +148,8 @@ class CrossEncoderRanker(torch.nn.Module):
     def forward(self, input_idx, label_input, context_len):
         scores = self.score_candidate(input_idx, context_len)
         loss = F.cross_entropy(scores, label_input, reduction="mean")
+        torch.set_printoptions(threshold=10_000)
+        print(scores,loss)
         return loss, scores
 
 

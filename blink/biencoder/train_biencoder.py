@@ -64,7 +64,7 @@ def evaluate(
         with torch.no_grad():
             eval_loss, logits = reranker(context_input, candidate_input)
 
-        logits = logits.detach().cpu().numpy()
+        logits = logits[0].detach().cpu().numpy()
         # Using in-batch negatives, the label ids are diagonal
         label_ids = torch.LongTensor(
                 torch.arange(params["eval_batch_size"])
