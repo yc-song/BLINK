@@ -21,6 +21,7 @@ def get_topk_predictions(
     cand_encode_list,
     silent,
     logger,
+    cand_cls_list,
     top_k=10,
     is_zeshel=False,
     save_predictions=False,
@@ -46,6 +47,7 @@ def get_topk_predictions(
         world_size = 1
         candidate_pool = [candidate_pool]
         cand_encode_list = [cand_encode_list]
+        cand_cls_list=[cand_cls_list]
 
     logger.info("World size : %d" % world_size)
 
@@ -67,10 +69,13 @@ def get_topk_predictions(
             context_input, _, label_ids = batch
             src = 0
         cand_encode_list[src] = cand_encode_list[src].to(device)
+        cand_cls_list[src] = cand_cls_list[src].to(device)
+
         scores, embedding_ctxt = reranker.score_candidate(
             context_input, 
             None, 
-            cand_encs=cand_encode_list[src]
+            cand_encs=cand_encode_list[src],
+            cand_cls=cand_cls_list[src]
         )
         values, indicies = scores.topk(top_k)
         old_src = src
@@ -84,7 +89,8 @@ def get_topk_predictions(
                 new_scores, embedding_ctxt = reranker.score_candidate(
                     context_input[[i]], 
                     None,
-                    cand_encs=cand_encode_list[src].to(device)
+                    cand_encs=cand_encode_list[src].to(device),
+                    cand_cls=cand_cls_list[src].to(device)
                 )
                 _, inds = new_scores.topk(top_k)
                 inds = inds[0]
@@ -97,9 +103,9 @@ def get_topk_predictions(
             stats[src].add(pointer)
 
             if pointer == -1:
-                # pointer = j + 1
+                pointer = j + 1
 
-                continue
+                # continue
 
             if not save_predictions:
                 continue
@@ -111,6 +117,7 @@ def get_topk_predictions(
             nn_candidates.append(cur_candidates.cpu().tolist())
             nn_labels.append(pointer)
             nn_worlds.append(src)
+
     res = Stats(top_k)
     for src in range(world_size):
         if stats[src].cnt == 0:
