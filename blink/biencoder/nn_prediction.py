@@ -104,19 +104,29 @@ def get_topk_predictions(
 
             if pointer == -1:
                 pointer = j + 1
+                cand_encode_list[srcs[i].item()]=cand_encode_list[srcs[i].item()].to(device)
+                cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
+                cur_candidates=torch.cat((cur_candidates,cand_encode_list[srcs[i].item()][label_ids[i]]), dim=0) #(65,1024)
+                nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
+                nn_candidates.append(cur_candidates.cpu().tolist())
+                nn_labels.append(pointer)
+                nn_worlds.append(src)
 
                 # continue
-
+            else:
+                cand_encode_list[srcs[i].item()]=cand_encode_list[srcs[i].item()].to(device)
+                cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
+                cur_candidates=torch.cat((cur_candidates,torch.rand(1,1024).to(device)), dim=0) #(65,1024)
+                nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
+                nn_candidates.append(cur_candidates.cpu().tolist())
+                nn_labels.append(pointer)
+                nn_worlds.append(src)
             if not save_predictions:
                 continue
 
             # add examples in new_data
-            cand_encode_list[srcs[i].item()]=cand_encode_list[srcs[i].item()].to(device)
-            cur_candidates = cand_encode_list[srcs[i].item()][inds]
-            nn_context.append(embedding_ctxt[i].cpu().tolist())
-            nn_candidates.append(cur_candidates.cpu().tolist())
-            nn_labels.append(pointer)
-            nn_worlds.append(src)
+
+
 
     res = Stats(top_k)
     for src in range(world_size):
@@ -130,9 +140,10 @@ def get_topk_predictions(
 
     logger.info(res.output())
 
-    nn_context = torch.FloatTensor(nn_context)
-    nn_candidates = torch.FloatTensor(nn_candidates)
+    nn_context = torch.FloatTensor(nn_context) # (10000,1024)
+    nn_candidates = torch.FloatTensor(nn_candidates) # (10000,64,1024) -> (10000,65,1024)
     nn_labels = torch.LongTensor(nn_labels)
+    torch.set_printoptions(threshold=10_000)
     nn_data = {
         'context_vecs': nn_context,
         'candidate_vecs': nn_candidates,
