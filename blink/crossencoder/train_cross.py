@@ -49,13 +49,15 @@ def modify(context_input, candidate_input, params):
     if params["architecture"]=="mlp" or params["architecture"]=="special_token":
         new_input=torch.stack((context_input,candidate_input),dim=2) # shape: (Size, 65, 2, 1024) e.g. (10000, 65, 2 , 1024)
     elif params["architecture"]== "raw_context_text":
+        print(context_input.shape)
+        print(candidate_input.shape)
         new_input=torch.cat((context_input,candidate_input),dim=2)
     # print(new_input.shape)
     # print(new_input.shape)
     return new_input
 
 
-def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=False, silent=True, train=True):
+def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=False, silent=True, train=True, input = None):
     reranker.eval()
     if silent:
         iter_ = eval_dataloader
@@ -65,7 +67,12 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=F
     results = {}
 
     eval_accuracy = 0.0
+    eval_accuracy_64 = 0.0
+    total_labels_64 = 0.0
     eval_mrr = 0.0
+    eval_mrr_64 = 0.0
+    total_mrr_64 =0.0
+
     nb_eval_examples = 0
     nb_eval_steps = 0
     eval_recall=0
@@ -91,11 +98,15 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=F
         logits = logits.detach().cpu().numpy()
         label_ids = label_input.cpu().numpy()
         tmp_eval_accuracy, eval_result = utils.accuracy(logits, label_ids)
+        tmp_eval_accuracy_64, tmp_labels_64 = utils.accuracy_label64(logits, label_ids)
+
         eval_recall += utils.recall(logits, label_ids)
         # print("recall", eval_recall)
-        eval_mrr+=utils.mrr(logits, label_ids)
-
+        eval_mrr+=utils.mrr(logits, label_ids, train=train, input = context_input)
+        eval_mrr_64+=utils.mrr_label64(logits, label_ids)
         eval_accuracy += tmp_eval_accuracy
+        eval_accuracy_64 += tmp_eval_accuracy_64
+        total_labels_64 += tmp_labels_64
         # print("accuracy", eval_accuracy)
         all_logits.extend(logits)
 
@@ -106,10 +117,11 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=F
                 acc[src_w] += eval_result[i]
                 tot[src_w] += 1
         nb_eval_steps += 1
-
     normalized_eval_accuracy = -1
     if nb_eval_examples > 0:
         normalized_eval_accuracy = eval_accuracy / nb_eval_examples
+        normalized_eval_accuracy_64 = eval_accuracy_64 / total_labels_64
+        eval_mrr_64 = eval_mrr_64 / total_labels_64
         eval_recall/=nb_eval_examples
         eval_mrr /= nb_eval_examples
     if zeshel:
@@ -123,16 +135,22 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=F
         if num > 0:
             logger.info("Macro accuracy: %.5f" % (macro / num))
             logger.info("Micro accuracy: %.5f" % normalized_eval_accuracy)
+    
     else:
         if logger:
             logger.info("Eval accuracy: %.5f" % normalized_eval_accuracy)
+    logger.info("Micro accuracy @ label 64: %.5f" % normalized_eval_accuracy_64)
     logger.info("MRR: %.5f" % eval_mrr)
+    logger.info("MRR @ label 64: %.5f" % eval_mrr_64)
+
     logger.info("Recall@4: %.5f" % eval_recall)
 
 
     results["normalized_accuracy"] = normalized_eval_accuracy
     results["logits"] = all_logits
     results["mrr"]=eval_mrr
+    results["mrr_64"]=eval_mrr_64
+    results["normalized_accuracy_64"]=normalized_eval_accuracy_64
     results["recall"]=eval_recall
     return results
 
@@ -210,7 +228,7 @@ def main(params):
 
     max_seq_length = params["max_seq_length"]
     context_length = params["max_context_length"]
-    fname = os.path.join(params["data_path"], "test.t7")
+    fname = os.path.join(params["data_path"], "train.t7")
 
     # fname2 = os.path.join(params["data_path"], "train2.t7")
     train_data = torch.load(fname)
@@ -318,19 +336,21 @@ def main(params):
         if params["optimizer"]=="Adam":
             optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
         elif params["optimizer"]=="AdamW":
-            optimizer = optim.AdamW(model.parameters(), lr=params["learning_rate"])
+            optimizer = optim.AdamW(model.parameters(), weight_decay=0.0001, lr=params["learning_rate"])
 
         elif params["optimizer"]=="SGD":
             optimizer = optim.SGD(model.parameters(), momentum=0.9, lr=params["learning_rate"])
         elif params["optimizer"]=="RMSprop":
             optimizer = optim.RMSprop(model.parameters(),lr=params["learning_rate"])
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
-
+        # scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
         # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=500, factor=0.9, min_lr=0.000001)
     elif params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
         optimizer = get_optimizer(model, params)
-        scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
+        # scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
     model.train()
+    print("1", optimizer)
 
     best_epoch_idx = -1
     best_score = -1
@@ -341,6 +361,8 @@ def main(params):
     print_interval=params["print_interval"]
     num_train_epochs = params["num_train_epochs"]
     for epoch_idx in trange(int(num_train_epochs), desc="Epoch"):
+        print("2", optimizer)
+
         tr_loss = 0
         val_acc=0
         val_loss_sum=0
@@ -355,7 +377,6 @@ def main(params):
         part = 0
         model.train()
         # print("\n opt", optimizer)
-        print("learning rate", scheduler.get_last_lr())
 
 
         for step, batch in enumerate(iter_):
@@ -375,6 +396,7 @@ def main(params):
                 loss = loss / grad_acc_steps
 
             tr_loss += loss.item()
+            
             # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
             if (step+1)%(print_interval*grad_acc_steps)==0 :
                 
@@ -542,7 +564,7 @@ def main(params):
             context_length=context_length,
             zeshel=params["zeshel"],
             silent=params["silent"],
-            train=False
+            train=False,
         )
         if (val_acc["normalized_accuracy"]<=last_acc):
             trigger_times+=1
@@ -571,18 +593,23 @@ def main(params):
             model.parameters(), params["max_grad_norm"]
         )
         optimizer.step()
+        # if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
         scheduler.step()
         optimizer.zero_grad()
         wandb.log({         
-            "learning_rate": scheduler.get_last_lr(),
+            "learning_rate":  optimizer.param_groups[0]['lr'],
             "train_bi-encoder_mrr":bi_train_mrr,
             "valid_bi-encoder_mrr":bi_val_mrr,
             "train_loss":tr_loss / (len(iter_) * grad_acc_steps),
             "val_loss":val_loss_sum / (len(iter_) * grad_acc_steps),
             "train_acc": train_acc["normalized_accuracy"],
+            "train_acc_64": train_acc["normalized_accuracy_64"],
             "val_acc":val_acc["normalized_accuracy"],
+            "val_acc_64":val_acc["normalized_accuracy_64"],
             'train_mrr':train_acc["mrr"],
+            'train_mrr_64':train_acc["mrr_64"],
             'val_mrr':val_acc['mrr'],
+            'val_mrr':val_acc['mrr_64'],
             "trigger_times":trigger_times,
             "train_recall":train_acc["recall"],
             "val_recall":val_acc["recall"],
