@@ -64,7 +64,7 @@ def modify(context_input, candidate_input, params, mode = "train", wo64 = True):
             # print(new_input.shape)
             # print(new_input.shape)
             return new_input
-    else: 
+    else:  
         context_input=context_input.unsqueeze(dim=1).expand(-1,top_k,-1)
         if params["architecture"]=="mlp" or params["architecture"]=="special_token":
             new_input=torch.stack((context_input,candidate_input),dim=2) # shape: (Size, 65, 2, 1024) e.g. (10000, 65, 2 , 1024)
@@ -216,6 +216,7 @@ def get_scheduler(params, optimizer, len_train_data, logger):
 
 
 def main(params):
+    print(params)
     gc.collect()
     nested_break=False
     # wandb.init(project=params["wandb"], config=parser, resume="must", id=<original_sweeps_run_id>)
@@ -377,10 +378,11 @@ def main(params):
     number_of_samples_per_dataset = {}
 
     time_start = time.time()
-
-    utils.write_to_file(
-        os.path.join(model_output_path, "training_params.txt"), str(params)
-    )
+    with open(os.path.join(model_output_path, "training_params.json"), 'w') as outfile:
+        json.dump(params, outfile)
+    # utils.write_to_file(
+    #     os.path.join(model_output_path, "training_params.json"), str(params)
+    # )
 
     logger.info("Starting training")
     logger.info(
@@ -425,289 +427,297 @@ def main(params):
     print_interval=params["print_interval"]
     num_train_epochs = params["num_train_epochs"]
     for epoch_idx in trange(int(num_train_epochs), desc="Epoch"):
-        print("optimizer:", optimizer)
+        execution_time = (time.time() - time_start) / 60
+        if execution_time < params["timeout"]-10:
+            print("optimizer:", optimizer)
 
-        tr_loss = 0
-        val_acc=0
-        val_loss_sum=0
-        results = None
-        if params["silent"]:
-            iter_ = train_dataloader
-        else:
-            iter_ = tqdm(train_dataloader, desc="Batch")
-            iter_valid = valid_dataloader
-        print_interval=len(iter_)
+            tr_loss = 0
+            val_acc=0
+            val_loss_sum=0
+            results = None
+            if params["silent"]:
+                iter_ = train_dataloader
+            else:
+                iter_ = tqdm(train_dataloader, desc="Batch")
+                iter_valid = valid_dataloader
+            print_interval=len(iter_)
 
-        part = 0
-        model.train()
-        # print("\n opt", optimizer)
-
-
-        for step, batch in enumerate(iter_):
-            torch.autograd.set_detect_anomaly(True)
+            part = 0
             model.train()
-            batch = tuple(t.to(device) for t in batch)
-            # print(batch)
-            # print(batch[0].shape)
-            # print(batch[1].shape)
-            context_input = batch[0] 
-            label_input = batch[1]
-            loss, _ = reranker(context_input, label_input, context_length)
-            # if n_gpu > 1:
-            #     loss = loss.mean() # mean() to average on multi-gpu.
+            # print("\n opt", optimizer)
 
-            if grad_acc_steps > 1:
-                loss = loss / grad_acc_steps
 
-            tr_loss += loss.item()
-            
-            # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
-            if (step+1)%(print_interval*grad_acc_steps)==0 :
+            for step, batch in enumerate(iter_):
+                torch.autograd.set_detect_anomaly(True)
+                model.train()
+                batch = tuple(t.to(device) for t in batch)
+                # print(batch)
+                # print(batch[0].shape)
+                # print(batch[1].shape)
+                context_input = batch[0] 
+                label_input = batch[1]
+                loss, _ = reranker(context_input, label_input, context_length)
+                # if n_gpu > 1:
+                #     loss = loss.mean() # mean() to average on multi-gpu.
+
+                if grad_acc_steps > 1:
+                    loss = loss / grad_acc_steps
+
+                tr_loss += loss.item()
                 
-                logger.info(
-                    "Step {} - epoch {} average training loss: {}\n".format(
-                        step,
-                        epoch_idx,
-                        tr_loss / (print_interval * grad_acc_steps),
-                    )
-                )
-                for step, batch in enumerate(iter_valid):
-                    model.eval()
-                    batch = tuple(t.to(device) for t in batch)
-                    context_input = batch[0] 
-                    label_input = batch[1]
-                    val_loss, _ = reranker(context_input, label_input, context_length)
-                                # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
-                    val_loss_sum += val_loss.item()
+                # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
+                if (step+1)%(print_interval*grad_acc_steps)==0 :
                     
-                    if (step + 1) == (len(iter_)):
-                        
-                        logger.info(
-                            "Step {} - epoch {} average validation loss: {}\n".format(
-                                step,
-                                epoch_idx,
-                                val_loss_sum / (print_interval * grad_acc_steps),
-                            )
+                    logger.info(
+                        "Step {} - epoch {} average training loss: {}\n".format(
+                            step,
+                            epoch_idx,
+                            tr_loss / (print_interval * grad_acc_steps),
                         )
-                # logger.info("Evaluation on the training dataset")
-                # train_acc=evaluate(
-                #     reranker,
-                #     train_dataloader,
-                #     device=device,
-                #     logger=logger,
-                #     context_length=context_length,
-                #     zeshel=params["zeshel"],
-                #     silent=params["silent"],
-                # )
-                
-                # logger.info("Evaluation on the development dataset")
-                # val_acc=evaluate(
-                #     reranker,
-                #     valid_dataloader,
-                #     device=device,
-                #     logger=logger,
-                #     context_length=context_length,
-                #     zeshel=params["zeshel"],
-                #     silent=params["silent"],
-                #     train=False
-                # )
-                # if (val_acc["normalized_accuracy"]<=last_acc):
-                #     trigger_times+=1
-                #     print("trigger_times", trigger_times)
-                #     if (trigger_times>patience):
-                #         print("Early stopping")
-                #         # if params["save"]:
-                #             # reranker.save_model(epoch_output_folder_path)
-                #         nested_break=True
-                #         break
-                # else:
-                #     print("valid accuracy got better")
-                #     trigger_times=0
-                # last_acc=val_acc["normalized_accuracy"]
-                
+                    )
+                    for step, batch in enumerate(iter_valid):
+                        model.eval()
+                        batch = tuple(t.to(device) for t in batch)
+                        context_input = batch[0] 
+                        label_input = batch[1]
+                        val_loss, _ = reranker(context_input, label_input, context_length)
+                                    # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
+                        val_loss_sum += val_loss.item()
+                        
+                        if (step + 1) == (len(iter_)):
+                            
+                            logger.info(
+                                "Step {} - epoch {} average validation loss: {}\n".format(
+                                    step,
+                                    epoch_idx,
+                                    val_loss_sum / (print_interval * grad_acc_steps),
+                                )
+                            )
+                    # logger.info("Evaluation on the training dataset")
+                    # train_acc=evaluate(
+                    #     reranker,
+                    #     train_dataloader,
+                    #     device=device,
+                    #     logger=logger,
+                    #     context_length=context_length,
+                    #     zeshel=params["zeshel"],
+                    #     silent=params["silent"],
+                    # )
+                    
+                    # logger.info("Evaluation on the development dataset")
+                    # val_acc=evaluate(
+                    #     reranker,
+                    #     valid_dataloader,
+                    #     device=device,
+                    #     logger=logger,
+                    #     context_length=context_length,
+                    #     zeshel=params["zeshel"],
+                    #     silent=params["silent"],
+                    #     train=False
+                    # )
+                    # if (val_acc["normalized_accuracy"]<=last_acc):
+                    #     trigger_times+=1
+                    #     print("trigger_times", trigger_times)
+                    #     if (trigger_times>patience):
+                    #         print("Early stopping")
+                    #         # if params["save"]:
+                    #             # reranker.save_model(epoch_output_folder_path)
+                    #         nested_break=True
+                    #         break
+                    # else:
+                    #     print("valid accuracy got better")
+                    #     trigger_times=0
+                    # last_acc=val_acc["normalized_accuracy"]
+                    
+            
+
+
+
+                # if (step+1)%(params["print_interval"]*grad_acc_steps) == 0:
+                #     logger.info("Evaluation on the training dataset")
+                #     train_acc=evaluate(
+                #         reranker,
+                #         train_dataloader,
+                #         device=device,
+                #         logger=logger,
+                #         context_length=context_length,
+                #         zeshel=params["zeshel"],
+                #         silent=params["silent"],
+                #     )
+                    
+                #     logger.info("Evaluation on the development dataset")
+                #     val_acc=evaluate(
+                #         reranker,
+                #         valid_dataloader,
+                #         device=device,
+                #         logger=logger,
+                #         context_length=context_length,
+                #         zeshel=params["zeshel"],
+                #         silent=params["silent"],
+                #         train=False
+                #     )
+                    
+                #     wandb.log({"train_acc":train_acc['normalized_accuracy'], "val_acc":val_acc['normalized_accuracy']})
+
+                #     # for step, batch in enumerate(iter_valid):
+                #     #     model.eval()
+                #     #     context_input = batch[0] 
+                #     #     label_input = batch[1]
+                #     #     loss, _ = reranker(context_input, label_input, context_length)
+                #     #     if grad_acc_steps > 1:
+                #     #         loss = loss / grad_acc_steps
+
+                #     #     val_loss += loss.item()
+
+                #     #     if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
+                #     #         logger.info(
+                #     #             "Step {} - epoch {} average val loss: {}\n".format(
+                #     #                 step,
+                #     #                 epoch_idx,
+                #     #                 val_loss / (params["print_interval"] * grad_acc_steps),
+                #     #             )
+                #     #         )
+
+                #     if (val_acc["normalized_accuracy"]<last_acc):
+                #         trigger_times+=1
+                #         print("trigger_times", trigger_times)
+                #         if (trigger_times>patience):
+                #             print("Early stopping")
+                #             # if params["save"]:
+                #                 # reranker.save_model(epoch_output_folder_path)
+                #             nested_break=True
+                #             break
+                #     else:
+                #         print("valid accuracy got better")
+                #         trigger_times=0
+                #     last_acc=val_acc["normalized_accuracy"]
+
+                #     # logger.info("***** Saving fine - tuned model *****")
+                #     # if (params["save"]):
+                #     #     epoch_output_folder_path = os.path.join(
+                #     #         model_output_path, "epoch_{}_{}".format(epoch_idx, part)
+                #     #     )
+                #     #     part += 1
+                #     #     # utils.save_model(model, tokenizer, epoch_output_folder_path)
+                #     #     torch.save(model.state_dict(), epoch_output_folder_path)
+                #     # reranker.save_model(epoch_output_folder_path)
+                #     model.train()
+                #     logger.info("\n")
         
+            logger.info("***** Saving fine - tuned model *****")
+            epoch_output_folder_path = os.path.join(
+                model_output_path, "epoch_{}.zip".format(epoch_idx)
+            )
+            if not epoch_idx % 50: 
+                torch.save(model.state_dict(), epoch_output_folder_path)
+            # utils.save_model(model, tokenizer, epoch_output_folder_path)
+            # reranker.save_model(epoch_output_folder_path)
+            logger.info("Evaluation on the training dataset")
+            train_acc=evaluate(
+                reranker,
+                train_dataloader,
+                device=device,
+                logger=logger,
+                context_length=context_length,
+                zeshel=params["zeshel"],
+                silent=params["silent"],
+                wo64=params["without_64"]
+            )
 
+            output_eval_file = os.path.join(epoch_output_folder_path, "eval_results.txt")
+            
+            logger.info("Evaluation on the development dataset")
+            val_acc=evaluate(
+                reranker,
+                valid_dataloader,
+                device=device,
+                logger=logger,
+                context_length=context_length,
+                zeshel=params["zeshel"],
+                silent=params["silent"],
+                train=False,
+                wo64=params["without_64"]
+            )
+            if (val_acc["normalized_accuracy"]<=last_acc):
+                trigger_times+=1
+                if (trigger_times>patience):
+                    print("Early stopping")
+                    # if params["save"]:
+                        # reranker.save_model(epoch_output_folder_path)
+                    nested_break=True
+                    break
+            else:
+                trigger_times=0
+            print("trigger_times", trigger_times)
 
+            last_acc=val_acc["normalized_accuracy"]
 
-            # if (step+1)%(params["print_interval"]*grad_acc_steps) == 0:
-            #     logger.info("Evaluation on the training dataset")
-            #     train_acc=evaluate(
-            #         reranker,
-            #         train_dataloader,
-            #         device=device,
-            #         logger=logger,
-            #         context_length=context_length,
-            #         zeshel=params["zeshel"],
-            #         silent=params["silent"],
-            #     )
-                
-            #     logger.info("Evaluation on the development dataset")
-            #     val_acc=evaluate(
-            #         reranker,
-            #         valid_dataloader,
-            #         device=device,
-            #         logger=logger,
-            #         context_length=context_length,
-            #         zeshel=params["zeshel"],
-            #         silent=params["silent"],
-            #         train=False
-            #     )
-                
-            #     wandb.log({"train_acc":train_acc['normalized_accuracy'], "val_acc":val_acc['normalized_accuracy']})
+            ls = [best_score, val_acc["normalized_accuracy"]]
+            li = [best_epoch_idx, epoch_idx]
 
-            #     # for step, batch in enumerate(iter_valid):
-            #     #     model.eval()
-            #     #     context_input = batch[0] 
-            #     #     label_input = batch[1]
-            #     #     loss, _ = reranker(context_input, label_input, context_length)
-            #     #     if grad_acc_steps > 1:
-            #     #         loss = loss / grad_acc_steps
+            best_score = ls[np.argmax(ls)]
+            best_epoch_idx = li[np.argmax(ls)]
 
-            #     #     val_loss += loss.item()
+            loss.backward()
 
-            #     #     if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
-            #     #         logger.info(
-            #     #             "Step {} - epoch {} average val loss: {}\n".format(
-            #     #                 step,
-            #     #                 epoch_idx,
-            #     #                 val_loss / (params["print_interval"] * grad_acc_steps),
-            #     #             )
-            #     #         )
+            # if (step + 1) % grad_acc_steps == 0:
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), params["max_grad_norm"]
+            )
+            optimizer.step()
+            # if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
+            # scheduler.step()
+            optimizer.zero_grad()
+            if params["without_64"]==False:
+                wandb.log({         
+                    "params/learning_rate":  optimizer.param_groups[0]['lr'],
+                    "mrr/train_bi-encoder_mrr":bi_train_mrr,
+                    "mrr/valid_bi-encoder_mrr":bi_val_mrr,
+                    "loss/train_loss":tr_loss / (len(iter_) * grad_acc_steps),
+                    "loss/val_loss":val_loss_sum / (len(iter_valid) * grad_acc_steps),
+                    "acc/train_acc": train_acc["normalized_accuracy"],
+                    "acc_64/train_acc_64": train_acc["normalized_accuracy_64"],
+                    "acc_not64/train_acc_not64": train_acc["normalized_accuracy_not64"],
+                    "acc/val_acc":val_acc["normalized_accuracy"],
+                    "acc_64/val_acc_64":val_acc["normalized_accuracy_64"],
+                    "acc_not64/val_acc_not64":val_acc["normalized_accuracy_not64"],
+                    'mrr/train_mrr':train_acc["mrr"],
+                    'acc_64/train_mrr_64':train_acc["mrr_64"],
+                    'mrr/val_mrr':val_acc['mrr'],
+                    'acc_64/val_mrr_64':val_acc['mrr_64'],
+                    "params/trigger_times":trigger_times,
+                    "recall/train_recall":train_acc["recall"],
+                    "recall/val_recall":val_acc["recall"],
+                    "params/epoch":epoch_idx
+                    })
+            else:
+                wandb.log({         
+                    "params/learning_rate":  optimizer.param_groups[0]['lr'],
+                    "mrr/train_bi-encoder_mrr":bi_train_mrr,
+                    "mrr/valid_bi-encoder_mrr":bi_val_mrr,
+                    "loss/train_loss":tr_loss / (len(iter_) * grad_acc_steps),
+                    "loss/val_loss":val_loss_sum / (len(iter_valid) * grad_acc_steps),
+                    "acc/train_acc": train_acc["normalized_accuracy"],
+                    "acc/val_acc":val_acc["normalized_accuracy"],
+                    'mrr/train_mrr':train_acc["mrr"],
+                    'mrr/val_mrr':val_acc['mrr'],
+                    "params/trigger_times":trigger_times,
+                    "recall/train_recall":train_acc["recall"],
+                    "recall/val_recall":val_acc["recall"],
+                    "params/epoch":epoch_idx
+                })
+            val_loss_sum = 0
+            tr_loss = 0
+            logger.info("\n")
 
-            #     if (val_acc["normalized_accuracy"]<last_acc):
-            #         trigger_times+=1
-            #         print("trigger_times", trigger_times)
-            #         if (trigger_times>patience):
-            #             print("Early stopping")
-            #             # if params["save"]:
-            #                 # reranker.save_model(epoch_output_folder_path)
-            #             nested_break=True
-            #             break
-            #     else:
-            #         print("valid accuracy got better")
-            #         trigger_times=0
-            #     last_acc=val_acc["normalized_accuracy"]
-
-            #     # logger.info("***** Saving fine - tuned model *****")
-            #     # if (params["save"]):
-            #     #     epoch_output_folder_path = os.path.join(
-            #     #         model_output_path, "epoch_{}_{}".format(epoch_idx, part)
-            #     #     )
-            #     #     part += 1
-            #     #     # utils.save_model(model, tokenizer, epoch_output_folder_path)
-            #     #     torch.save(model.state_dict(), epoch_output_folder_path)
-            #     # reranker.save_model(epoch_output_folder_path)
-            #     model.train()
-            #     logger.info("\n")
-    
-        logger.info("***** Saving fine - tuned model *****")
-        epoch_output_folder_path = os.path.join(
-            model_output_path, "epoch_{}.zip".format(epoch_idx)
-        )
-        if not epoch_idx % 50: 
-            torch.save(model.state_dict(), epoch_output_folder_path)
-        # utils.save_model(model, tokenizer, epoch_output_folder_path)
-        # reranker.save_model(epoch_output_folder_path)
-        logger.info("Evaluation on the training dataset")
-        train_acc=evaluate(
-            reranker,
-            train_dataloader,
-            device=device,
-            logger=logger,
-            context_length=context_length,
-            zeshel=params["zeshel"],
-            silent=params["silent"],
-            wo64=params["without_64"]
-        )
-
-        output_eval_file = os.path.join(epoch_output_folder_path, "eval_results.txt")
-        
-        logger.info("Evaluation on the development dataset")
-        val_acc=evaluate(
-            reranker,
-            valid_dataloader,
-            device=device,
-            logger=logger,
-            context_length=context_length,
-            zeshel=params["zeshel"],
-            silent=params["silent"],
-            train=False,
-            wo64=params["without_64"]
-        )
-        if (val_acc["normalized_accuracy"]<=last_acc):
-            trigger_times+=1
-            if (trigger_times>patience):
-                print("Early stopping")
-                # if params["save"]:
-                    # reranker.save_model(epoch_output_folder_path)
-                nested_break=True
+            if nested_break==True:
                 break
         else:
-            trigger_times=0
-        print("trigger_times", trigger_times)
-
-        last_acc=val_acc["normalized_accuracy"]
-
-        ls = [best_score, val_acc["normalized_accuracy"]]
-        li = [best_epoch_idx, epoch_idx]
-
-        best_score = ls[np.argmax(ls)]
-        best_epoch_idx = li[np.argmax(ls)]
-
-        loss.backward()
-
-        # if (step + 1) % grad_acc_steps == 0:
-        torch.nn.utils.clip_grad_norm_(
-            model.parameters(), params["max_grad_norm"]
-        )
-        optimizer.step()
-        # if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
-        # scheduler.step()
-        optimizer.zero_grad()
-        if params["without_64"]==False:
-            wandb.log({         
-                "params/learning_rate":  optimizer.param_groups[0]['lr'],
-                "mrr/train_bi-encoder_mrr":bi_train_mrr,
-                "mrr/valid_bi-encoder_mrr":bi_val_mrr,
-                "loss/train_loss":tr_loss / (len(iter_) * grad_acc_steps),
-                "loss/val_loss":val_loss_sum / (len(iter_valid) * grad_acc_steps),
-                "acc/train_acc": train_acc["normalized_accuracy"],
-                "acc_64/train_acc_64": train_acc["normalized_accuracy_64"],
-                "acc_not64/train_acc_not64": train_acc["normalized_accuracy_not64"],
-                "acc/val_acc":val_acc["normalized_accuracy"],
-                "acc_64/val_acc_64":val_acc["normalized_accuracy_64"],
-                "acc_not64/val_acc_not64":val_acc["normalized_accuracy_not64"],
-                'mrr/train_mrr':train_acc["mrr"],
-                'acc_64/train_mrr_64':train_acc["mrr_64"],
-                'mrr/val_mrr':val_acc['mrr'],
-                'acc_64/val_mrr_64':val_acc['mrr_64'],
-                "params/trigger_times":trigger_times,
-                "recall/train_recall":train_acc["recall"],
-                "recall/val_recall":val_acc["recall"],
-                "params/epoch":epoch_idx
-                })
-        else:
-            wandb.log({         
-                "params/learning_rate":  optimizer.param_groups[0]['lr'],
-                "mrr/train_bi-encoder_mrr":bi_train_mrr,
-                "mrr/valid_bi-encoder_mrr":bi_val_mrr,
-                "loss/train_loss":tr_loss / (len(iter_) * grad_acc_steps),
-                "loss/val_loss":val_loss_sum / (len(iter_valid) * grad_acc_steps),
-                "acc/train_acc": train_acc["normalized_accuracy"],
-                "acc/val_acc":val_acc["normalized_accuracy"],
-                'mrr/train_mrr':train_acc["mrr"],
-                'mrr/val_mrr':val_acc['mrr'],
-                "params/trigger_times":trigger_times,
-                "recall/train_recall":train_acc["recall"],
-                "recall/val_recall":val_acc["recall"],
-                "params/epoch":epoch_idx
-            })
-        val_loss_sum = 0
-        tr_loss = 0
-        logger.info("\n")
-
-        if nested_break==True:
             break
+    if nested_break == False:
+        final_val_acc = int(100*val_acc["normalized_accuracy"])
+    else:
+        final_val_acc = 0 # To escape the loop on the shell script
     if params["without_64"]==False:
         ## Evalutation on train set (w/o 64)
         fname = os.path.join(params["data_path"], "train_wo64.t7")
@@ -895,7 +905,13 @@ def main(params):
         if each_file_path != most_recent_file and each_file_path[-3:]=="zip":
             os.remove(each_file_path)
 
+    # print("\rval_acc is {}".format(val_acc['mrr']))
+    # print("\r")
+    if final_val_acc < 10:
+        final_val_acc = '0'+str(final_val_acc)
+    print(run.id,final_val_acc)
 
+    
 if __name__ == "__main__":
     parser = BlinkParser(add_model_args=True)
     parser.add_training_args()
@@ -903,7 +919,7 @@ if __name__ == "__main__":
 
     # args = argparse.Namespace(**params)
     args = parser.parse_args()
-    print(args)
+    # print(args)
 
     params = args.__dict__
 
