@@ -42,8 +42,6 @@ logger = None
 def modify(context_input, candidate_input, params, mode = "train", wo64 = True):
 
     top_k=params["top_k"]
-    # print("context", context_input.shape)
-    # print("candidate", candidate_input.shape)
     ## context_input shape: (Size ,1024) e.g.  (10000, 1024)
     ## candidate_input shape: (Size, 65, 1024) e.g. (10000, 65, 1024)
     if wo64 == False:
@@ -69,6 +67,7 @@ def modify(context_input, candidate_input, params, mode = "train", wo64 = True):
         if params["architecture"]=="mlp" or params["architecture"]=="special_token":
             new_input=torch.stack((context_input,candidate_input),dim=2) # shape: (Size, 65, 2, 1024) e.g. (10000, 65, 2 , 1024)
         elif params["architecture"]== "raw_context_text":
+        
             new_input=torch.cat((context_input,candidate_input),dim=2)
         # print(new_input.shape)
         # print(new_input.shape)
@@ -117,20 +116,20 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=F
         batch = tuple(t.to(device) for t in batch)
         context_input = batch[0]
         label_input = batch[1]
+
         with torch.no_grad():
             eval_loss, logits = reranker(context_input, label_input, context_length)
         logits = logits.detach().cpu().numpy()
         label_ids = label_input.cpu().numpy()
         tmp_eval_accuracy, eval_result = utils.accuracy(logits, label_ids)
-        tmp_eval_accuracy_64, tmp_labels_64 = utils.accuracy_label64(logits, label_ids)
-        tmp_eval_accuracy_not64, tmp_labels_not64 = utils.accuracy_label64(logits, label_ids, label_64=False)
-
+        
         eval_recall += utils.recall(logits, label_ids)
         # print("recall", eval_recall)
         eval_mrr+=utils.mrr(logits, label_ids, train=train, input = context_input)
-
         eval_accuracy += tmp_eval_accuracy
         if wo64 == False:
+            tmp_eval_accuracy_64, tmp_labels_64 = utils.accuracy_label64(logits, label_ids)
+            tmp_eval_accuracy_not64, tmp_labels_not64 = utils.accuracy_label64(logits, label_ids, label_64=False)
             eval_mrr_64+=utils.mrr_label64(logits, label_ids)
             eval_accuracy_64 += tmp_eval_accuracy_64
             eval_accuracy_not64 += tmp_eval_accuracy_not64
@@ -156,6 +155,7 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=F
             eval_mrr_64 = eval_mrr_64 / total_labels_64
         eval_recall/=nb_eval_examples
         eval_mrr /= nb_eval_examples
+
     if zeshel:
         macro = 0.0
         num = 0.0 
@@ -199,16 +199,15 @@ def get_optimizer(model, params):
     )
 
 
-def get_scheduler(params, optimizer, len_train_data, logger):
+def get_scheduler(params, optimizer, len_train_data, logger, last_epoch = -1):
     batch_size = params["train_batch_size"]
     grad_acc = params["gradient_accumulation_steps"]
     epochs = params["num_train_epochs"]
 
     num_train_steps = int(len_train_data / batch_size / grad_acc) * epochs
     num_warmup_steps = int(num_train_steps * params["warmup_proportion"])
-
     scheduler = WarmupLinearSchedule(
-        optimizer, warmup_steps=num_warmup_steps, t_total=num_train_steps,
+        optimizer, warmup_steps=num_warmup_steps, t_total=num_train_steps
     )
     logger.info(" Num optimization steps = %d" % num_train_steps)
     logger.info(" Num warmup steps = %d", num_warmup_steps)
@@ -216,10 +215,11 @@ def get_scheduler(params, optimizer, len_train_data, logger):
 
 
 def main(params):
-    print(params)
+    print(params["act_fn"])
     gc.collect()
     nested_break=False
     # wandb.init(project=params["wandb"], config=parser, resume="must", id=<original_sweeps_run_id>)
+    epoch_idx_global = 0
 
     # Init model
     if params["architecture"]=="mlp":
@@ -229,6 +229,26 @@ def main(params):
     tokenizer = reranker.tokenizer
     model = reranker.model
 
+    if params["architecture"] == "mlp":
+        if params["optimizer"]=="Adam":
+            optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
+        elif params["optimizer"]=="AdamW":
+            optimizer = optim.AdamW(model.parameters(), weight_decay=params["weight_decay"], lr=params["learning_rate"])
+
+        elif params["optimizer"]=="SGD":
+            optimizer = optim.SGD(model.parameters(), momentum=0.9, lr=params["learning_rate"])
+        elif params["optimizer"]=="RMSprop":
+            optimizer = optim.RMSprop(model.parameters(),lr=params["learning_rate"])
+        # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
+        # scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
+        # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=500, factor=0.9, min_lr=0.000001)
+    elif params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
+        optimizer = get_optimizer(model, params)
+        # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
+
+
+    if params["architecture"]=="mlp":
+        print("model architecture", model.layers)
     # if you want to resume the training, set "resume" true and specify "run_id"
     if params["resume"]==True:
         folder_path="models/zeshel/crossencoder/{}/".format(params["run_id"])
@@ -236,19 +256,28 @@ def main(params):
         each_file_path_and_gen_time = []
         ## Getting newest file
         for each_file_name in os.listdir(folder_path):
-            each_file_path = folder_path + each_file_name
-            each_file_gen_time = os.path.getctime(each_file_path)
-            each_file_path_and_gen_time.append(
-                (each_file_path, each_file_gen_time)
-            )
+            if each_file_name[0]=="e":
+                each_file_path = folder_path + each_file_name
+                each_file_gen_time = os.path.getctime(each_file_path)
+                each_file_path_and_gen_time.append(
+                    (each_file_path, each_file_gen_time)
+                )
         most_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[0]
         run = wandb.init(project=params["wandb"], config=parser, resume="must", id=params["run_id"])
-        print(most_recent_file)
-        model.load_state_dict(torch.load(most_recent_file))
+        print("file loaded:", most_recent_file)
+        checkpoint = torch.load(most_recent_file)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        epoch_idx_global = checkpoint['epoch']
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     else:
         run = wandb.init(project=params["wandb"], config=parser)
     config = wandb.config
     model_output_path = params["output_path"]+run.id
+    if not params["resume"]:
+        if not os.path.exists(model_output_path+"training_params"):
+            os.makedirs(model_output_path+"/training_params")
+        with open(os.path.join(model_output_path, "training_params/training_params.json"), 'w') as outfile:
+            json.dump(params, outfile)
     if not os.path.exists(model_output_path):
         os.makedirs(model_output_path)
     logger = utils.get_logger(params["output_path"])
@@ -282,10 +311,13 @@ def main(params):
 
     max_seq_length = params["max_seq_length"]
     context_length = params["max_context_length"]
-    if params["without_64"]==False:
-        fname = os.path.join(params["data_path"], "train.t7")
+    if params["architecture"] == "raw_context_text":
+        fname = os.path.join(params["data_path"], "train_raw_wo64.t7")
     else:
-        fname = os.path.join(params["data_path"], "train_wo64.t7")
+        if params["without_64"]==False:
+            fname = os.path.join(params["data_path"], "train.t7")
+        else:
+            fname = os.path.join(params["data_path"], "train_wo64.t7")
 
 
     # fname2 = os.path.join(params["data_path"], "train2.t7")
@@ -326,11 +358,17 @@ def main(params):
         batch_size=params["train_batch_size"]
     )
 
+    if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
+        scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
+
     ## valid dataset preprocessing
-    if params["without_64"]==False:
-        fname = os.path.join(params["data_path"], "valid.t7")
+    if params["architecture"] == "raw_context_text":
+        fname = os.path.join(params["data_path"], "valid_raw_wo64.t7")
     else:
-        fname = os.path.join(params["data_path"], "valid_wo64.t7")
+        if params["without_64"]==False:
+            fname = os.path.join(params["data_path"], "valid.t7")
+        else:
+            fname = os.path.join(params["data_path"], "valid_wo64.t7")
 
 
     valid_data = torch.load(fname)
@@ -364,22 +402,20 @@ def main(params):
     )
 
     # evaluate before training
-    results = evaluate(
-        reranker,
-        valid_dataloader,
-        device=device,
-        logger=logger,
-        context_length=context_length,
-        zeshel=params["zeshel"],
-        silent=params["silent"],
-        wo64=params["without_64"]
-    )
+    # results = evaluate(
+    #     reranker,
+    #     valid_dataloader,
+    #     device=device,
+    #     logger=logger,
+    #     context_length=context_length,
+    #     zeshel=params["zeshel"],
+    #     silent=params["silent"],
+    #     wo64=params["without_64"]
+    # )
 
     number_of_samples_per_dataset = {}
 
     time_start = time.time()
-    with open(os.path.join(model_output_path, "training_params.json"), 'w') as outfile:
-        json.dump(params, outfile)
     # utils.write_to_file(
     #     os.path.join(model_output_path, "training_params.json"), str(params)
     # )
@@ -398,26 +434,10 @@ def main(params):
     # elif params["optimizer"]=="RMSprop":
         # optimizer = optim.RMSprop(model.parameters(), lr=params["learning_rate"])
  
-    if params["architecture"] == "mlp":
-        if params["optimizer"]=="Adam":
-            optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
-        elif params["optimizer"]=="AdamW":
-            optimizer = optim.AdamW(model.parameters(), weight_decay=params["weight_decay"], lr=params["learning_rate"])
-
-        elif params["optimizer"]=="SGD":
-            optimizer = optim.SGD(model.parameters(), momentum=0.9, lr=params["learning_rate"])
-        elif params["optimizer"]=="RMSprop":
-            optimizer = optim.RMSprop(model.parameters(),lr=params["learning_rate"])
-        # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
-        # scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
-        # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=500, factor=0.9, min_lr=0.000001)
-    elif params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
-        optimizer = get_optimizer(model, params)
-        # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
-        # scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
-    model.train()
-    print("optimizer: ", optimizer)
-
+    if params["architecture"] != "mlp":
+        scheduler.step()
+        for i in range(epoch_idx_global):
+            scheduler.step()
     best_epoch_idx = -1
     best_score = -1
     #Early stopping variables
@@ -426,7 +446,9 @@ def main(params):
     trigger_times=-1
     print_interval=params["print_interval"]
     num_train_epochs = params["num_train_epochs"]
-    for epoch_idx in trange(int(num_train_epochs), desc="Epoch"):
+    for epoch_idx in trange(epoch_idx_global, epoch_idx_global+int(num_train_epochs), desc="Epoch"):
+        model.train()
+        epoch_idx_global = epoch_idx
         execution_time = (time.time() - time_start) / 60
         if execution_time < params["timeout"]-10:
             print("optimizer:", optimizer)
@@ -440,13 +462,9 @@ def main(params):
             else:
                 iter_ = tqdm(train_dataloader, desc="Batch")
                 iter_valid = valid_dataloader
-            print_interval=len(iter_)
 
             part = 0
             model.train()
-            # print("\n opt", optimizer)
-
-
             for step, batch in enumerate(iter_):
                 torch.autograd.set_detect_anomaly(True)
                 model.train()
@@ -465,153 +483,91 @@ def main(params):
 
                 tr_loss += loss.item()
                 
-                # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
-                if (step+1)%(print_interval*grad_acc_steps)==0 :
+                if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
                     
                     logger.info(
                         "Step {} - epoch {} average training loss: {}\n".format(
                             step,
                             epoch_idx,
-                            tr_loss / (print_interval * grad_acc_steps),
+                            tr_loss / (params["print_interval"] * grad_acc_steps),
                         )
                     )
-                    for step, batch in enumerate(iter_valid):
-                        model.eval()
-                        batch = tuple(t.to(device) for t in batch)
-                        context_input = batch[0] 
-                        label_input = batch[1]
-                        val_loss, _ = reranker(context_input, label_input, context_length)
-                                    # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
-                        val_loss_sum += val_loss.item()
-                        
-                        if (step + 1) == (len(iter_)):
-                            
-                            logger.info(
-                                "Step {} - epoch {} average validation loss: {}\n".format(
-                                    step,
-                                    epoch_idx,
-                                    val_loss_sum / (print_interval * grad_acc_steps),
-                                )
-                            )
-                    # logger.info("Evaluation on the training dataset")
-                    # train_acc=evaluate(
-                    #     reranker,
-                    #     train_dataloader,
-                    #     device=device,
-                    #     logger=logger,
-                    #     context_length=context_length,
-                    #     zeshel=params["zeshel"],
-                    #     silent=params["silent"],
-                    # )
+                    wandb.log({
+                    "loss/train_loss":tr_loss / (params["print_interval"] * grad_acc_steps),
+                    "params/epoch":epoch_idx
+                    })
+                    tr_loss = 0
+                loss.backward()
+
+
                     
-                    # logger.info("Evaluation on the development dataset")
-                    # val_acc=evaluate(
-                    #     reranker,
-                    #     valid_dataloader,
-                    #     device=device,
-                    #     logger=logger,
-                    #     context_length=context_length,
-                    #     zeshel=params["zeshel"],
-                    #     silent=params["silent"],
-                    #     train=False
-                    # )
-                    # if (val_acc["normalized_accuracy"]<=last_acc):
-                    #     trigger_times+=1
-                    #     print("trigger_times", trigger_times)
-                    #     if (trigger_times>patience):
-                    #         print("Early stopping")
-                    #         # if params["save"]:
-                    #             # reranker.save_model(epoch_output_folder_path)
-                    #         nested_break=True
-                    #         break
-                    # else:
-                    #     print("valid accuracy got better")
-                    #     trigger_times=0
-                    # last_acc=val_acc["normalized_accuracy"]
-                    
-            
-
-
-
-                # if (step+1)%(params["print_interval"]*grad_acc_steps) == 0:
-                #     logger.info("Evaluation on the training dataset")
-                #     train_acc=evaluate(
-                #         reranker,
-                #         train_dataloader,
-                #         device=device,
-                #         logger=logger,
-                #         context_length=context_length,
-                #         zeshel=params["zeshel"],
-                #         silent=params["silent"],
-                #     )
-                    
-                #     logger.info("Evaluation on the development dataset")
-                #     val_acc=evaluate(
-                #         reranker,
-                #         valid_dataloader,
-                #         device=device,
-                #         logger=logger,
-                #         context_length=context_length,
-                #         zeshel=params["zeshel"],
-                #         silent=params["silent"],
-                #         train=False
-                #     )
-                    
-                #     wandb.log({"train_acc":train_acc['normalized_accuracy'], "val_acc":val_acc['normalized_accuracy']})
-
-                #     # for step, batch in enumerate(iter_valid):
-                #     #     model.eval()
-                #     #     context_input = batch[0] 
-                #     #     label_input = batch[1]
-                #     #     loss, _ = reranker(context_input, label_input, context_length)
-                #     #     if grad_acc_steps > 1:
-                #     #         loss = loss / grad_acc_steps
-
-                #     #     val_loss += loss.item()
-
-                #     #     if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
-                #     #         logger.info(
-                #     #             "Step {} - epoch {} average val loss: {}\n".format(
-                #     #                 step,
-                #     #                 epoch_idx,
-                #     #                 val_loss / (params["print_interval"] * grad_acc_steps),
-                #     #             )
-                #     #         )
-
-                #     if (val_acc["normalized_accuracy"]<last_acc):
-                #         trigger_times+=1
-                #         print("trigger_times", trigger_times)
-                #         if (trigger_times>patience):
-                #             print("Early stopping")
-                #             # if params["save"]:
-                #                 # reranker.save_model(epoch_output_folder_path)
-                #             nested_break=True
-                #             break
-                #     else:
-                #         print("valid accuracy got better")
-                #         trigger_times=0
-                #     last_acc=val_acc["normalized_accuracy"]
-
-                #     # logger.info("***** Saving fine - tuned model *****")
-                #     # if (params["save"]):
-                #     #     epoch_output_folder_path = os.path.join(
-                #     #         model_output_path, "epoch_{}_{}".format(epoch_idx, part)
-                #     #     )
-                #     #     part += 1
-                #     #     # utils.save_model(model, tokenizer, epoch_output_folder_path)
-                #     #     torch.save(model.state_dict(), epoch_output_folder_path)
-                #     # reranker.save_model(epoch_output_folder_path)
-                #     model.train()
-                #     logger.info("\n")
-        
-            logger.info("***** Saving fine - tuned model *****")
-            epoch_output_folder_path = os.path.join(
-                model_output_path, "epoch_{}.zip".format(epoch_idx)
-            )
-            if not epoch_idx % 50: 
-                torch.save(model.state_dict(), epoch_output_folder_path)
+                if (step + 1) % grad_acc_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), params["max_grad_norm"]
+                    )
+                    optimizer.step()
+                    if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
+                        scheduler.step()
+                    optimizer.zero_grad()
+            if params["architecture"]=="raw_context_text":
+                if params["save"]:
+                    logger.info("***** Saving fine - tuned model *****")
+                    epoch_output_folder_path = os.path.join(
+                    model_output_path, "epoch_{}".format(epoch_idx)
+                )
+                    torch.save({
+                    'epoch': epoch_idx,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict()
+                    }, epoch_output_folder_path)
+            elif params["architecture"]=="special_token":
+                if not epoch_idx % 10 and params["save"]: 
+                    logger.info("***** Saving fine - tuned model *****")
+                    epoch_output_folder_path = os.path.join(
+                    model_output_path, "epoch_{}".format(epoch_idx)
+                    )
+                    torch.save({
+                    'epoch': epoch_idx,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict()
+                    }, epoch_output_folder_path)
+            else:
+                if not epoch_idx % 50 and params["save"]: 
+                    logger.info("***** Saving fine - tuned model *****")
+                    epoch_output_folder_path = os.path.join(
+                    model_output_path, "epoch_{}".format(epoch_idx)
+                    )
+                    torch.save({
+                    'epoch': epoch_idx,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict()
+                    }, epoch_output_folder_path)
             # utils.save_model(model, tokenizer, epoch_output_folder_path)
             # reranker.save_model(epoch_output_folder_path)
+            if params["architecture"]=="mlp":
+                logger.info("Loss on the validation dataset")
+                model.eval()
+                for step, batch in enumerate(iter_valid):
+                    batch = tuple(t.to(device) for t in batch)
+                    context_input = batch[0] 
+                    label_input = batch[1]
+                    val_loss, _ = reranker(context_input, label_input, context_length)
+                                # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
+                    val_loss_sum += val_loss.item()
+                    
+                        
+                logger.info(
+                    "epoch {} average validation loss: {}\n".format(
+                        epoch_idx,
+                        val_loss_sum / (len(iter_valid) * grad_acc_steps),
+                    )
+                )
+                wandb.log({
+                "loss/val_loss": val_loss_sum / (len(iter_valid) * grad_acc_steps),
+                "params/epoch": epoch_idx
+                })
+                val_loss_sum = 0
+
             logger.info("Evaluation on the training dataset")
             train_acc=evaluate(
                 reranker,
@@ -641,7 +597,7 @@ def main(params):
             if (val_acc["normalized_accuracy"]<=last_acc):
                 trigger_times+=1
                 if (trigger_times>patience):
-                    print("Early stopping")
+                    logger.info("Early stopping by Patience")
                     # if params["save"]:
                         # reranker.save_model(epoch_output_folder_path)
                     nested_break=True
@@ -658,23 +614,16 @@ def main(params):
             best_score = ls[np.argmax(ls)]
             best_epoch_idx = li[np.argmax(ls)]
 
-            loss.backward()
+            if train_acc["mrr"] == 1:
+                raise Exception("FFNN converged")
 
             # if (step + 1) % grad_acc_steps == 0:
-            torch.nn.utils.clip_grad_norm_(
-                model.parameters(), params["max_grad_norm"]
-            )
-            optimizer.step()
-            # if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
-            # scheduler.step()
-            optimizer.zero_grad()
+
             if params["without_64"]==False:
                 wandb.log({         
                     "params/learning_rate":  optimizer.param_groups[0]['lr'],
                     "mrr/train_bi-encoder_mrr":bi_train_mrr,
                     "mrr/valid_bi-encoder_mrr":bi_val_mrr,
-                    "loss/train_loss":tr_loss / (len(iter_) * grad_acc_steps),
-                    "loss/val_loss":val_loss_sum / (len(iter_valid) * grad_acc_steps),
                     "acc/train_acc": train_acc["normalized_accuracy"],
                     "acc_64/train_acc_64": train_acc["normalized_accuracy_64"],
                     "acc_not64/train_acc_not64": train_acc["normalized_accuracy_not64"],
@@ -695,8 +644,6 @@ def main(params):
                     "params/learning_rate":  optimizer.param_groups[0]['lr'],
                     "mrr/train_bi-encoder_mrr":bi_train_mrr,
                     "mrr/valid_bi-encoder_mrr":bi_val_mrr,
-                    "loss/train_loss":tr_loss / (len(iter_) * grad_acc_steps),
-                    "loss/val_loss":val_loss_sum / (len(iter_valid) * grad_acc_steps),
                     "acc/train_acc": train_acc["normalized_accuracy"],
                     "acc/val_acc":val_acc["normalized_accuracy"],
                     'mrr/train_mrr':train_acc["mrr"],
@@ -706,18 +653,13 @@ def main(params):
                     "recall/val_recall":val_acc["recall"],
                     "params/epoch":epoch_idx
                 })
-            val_loss_sum = 0
-            tr_loss = 0
             logger.info("\n")
-
+            model.train()
             if nested_break==True:
                 break
-        else:
+        else: 
+            print("time_out")
             break
-    if nested_break == False:
-        final_val_acc = int(100*val_acc["normalized_accuracy"])
-    else:
-        final_val_acc = 0 # To escape the loop on the shell script
     if params["without_64"]==False:
         ## Evalutation on train set (w/o 64)
         fname = os.path.join(params["data_path"], "train_wo64.t7")
@@ -821,7 +763,10 @@ def main(params):
 
 
     ## Evaluation on test set
-    fname = os.path.join(params["data_path"], "test.t7")
+    if params["architecture"] == "raw_context_text":
+        fname = os.path.join(params["data_path"], "test_raw_wo64.t7")
+    else:
+        fname = os.path.join(params["data_path"], "test.t7")
 
     test_data = torch.load(fname)
     context_input = test_data["context_vecs"]
@@ -862,33 +807,30 @@ def main(params):
         train=False,
         wo64=params["without_64"]
     )
+    if params["resume"]==True:
+        wandb.init(project=params["wandb"], config=parser, resume="must", id=params["run_id"])
+    else:
+        wandb.init(project=params["wandb"], config=parser)
     if params["without_64"]==False:
         wandb.log({         
-                "test_acc":test_acc["normalized_accuracy"],
-                "test_acc_64":test_acc["normalized_accuracy_64"],
-                "test_acc_not64":test_acc["normalized_accuracy_not64"],
-                "test_recall":test_acc["recall"],
+                "acc/test_acc":test_acc["normalized_accuracy"],
+                "wo64/test_acc_64":test_acc["normalized_accuracy_64"],
+                "wo64/test_acc_not64":test_acc["normalized_accuracy_not64"],
+                "recall/test_recall":test_acc["recall"],
                 })
     else:
         wandb.log({         
-            "test_acc":test_acc["normalized_accuracy"],
-            "test_recall":test_acc["recall"],
+            "acc/test_acc":test_acc["normalized_accuracy"],
+            "recall/test_recall":test_acc["recall"],
             })
-    execution_time = (time.time() - time_start) / 60
-    utils.write_to_file(
-        os.path.join(model_output_path, "training_time.txt"),
-        "The training took {} minutes\n".format(execution_time),
-    )
-    logger.info("The training took {} minutes\n".format(execution_time))
-
 
     # save the best model in the parent_dir
-    if (params["save"]):
-        logger.info("Best performance in epoch: {}".format(best_epoch_idx))
-        params["path_to_model"] = os.path.join(
-            model_output_path, "epoch_{}".format(best_epoch_idx)
-        )
-        torch.save(model.state_dict(), epoch_output_folder_path)
+    # if (params["save"]):
+    #     logger.info("Best performance in epoch: {}".format(best_epoch_idx))
+    #     params["path_to_model"] = os.path.join(
+    #         model_output_path, "epoch_{}".format(best_epoch_idx)
+    #     )
+    #     torch.save(model.state_dict(), epoch_output_folder_path)
     ## Remove every file but the newest file
     folder_path="models/zeshel/crossencoder/{}/".format(run.id)
     each_file_path_and_gen_time = []
@@ -902,14 +844,13 @@ def main(params):
     most_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[0]
     for each_file_name in os.listdir(folder_path):
         each_file_path = folder_path + each_file_name
-        if each_file_path != most_recent_file and each_file_path[-3:]=="zip":
+        if each_file_path != most_recent_file and each_file_path[0]=="e":
             os.remove(each_file_path)
 
     # print("\rval_acc is {}".format(val_acc['mrr']))
     # print("\r")
-    if final_val_acc < 10:
-        final_val_acc = '0'+str(final_val_acc)
-    print(run.id,final_val_acc)
+
+    print("run_id:{}".format(run.id))
 
     
 if __name__ == "__main__":
