@@ -20,7 +20,7 @@ def load_mlp(params):
     # Init model
     crossencoder = MlpModel(params)
     return crossencoder
-k=65
+k=64
 input_size=768*2 #(64,256)
 ## model이랑 module, ranker 나눠서 modeule이랑 ranker에서 model 호출
 class MlpModel(nn.Module):
@@ -36,8 +36,9 @@ class MlpModel(nn.Module):
                 "bert-base-cased"
             )
         self.build_model()
+        self.top_k = top_k
         self.model = self.model.to(self.device)
-        self.model = torch.nn.DataParallel(self.model)
+        # self.model = torch.nn.DataParallel(self.model)
     def build_model(self):
         self.model=MlpModule(self.params)
     def save_model(self, output_dir):
@@ -50,34 +51,58 @@ class MlpModel(nn.Module):
         else:
             state_dict = torch.load(fname)
         self.model.load_state_dict(state_dict)
-    def forward(self, input, label_input, context_length):
+    def forward(self, input, label_input, context_length, evaluate = False):
         # summary(self.model, input_size=(1, 2, 1024))
-        scores=torch.squeeze(self.model(input), dim=2)
-        loss=F.cross_entropy(scores, label_input, reduction="mean")
-        
+
+        # input shape: (batch size, top_k, 2, bert_hidden_dimension)
+        # score shape: (batch_size, top_k)
+        if not self.params["binary_loss"]:
+            scores=torch.squeeze(self.model(input), dim=2)
+            loss=F.cross_entropy(scores, label_input, reduction="mean")
+        else:
+            if not evaluate:
+                num_samples = 10
+                label_input = torch.unsqueeze(label_input, dim = 1)
+                target = torch.zeros((input.size(0), num_samples + 1), device = torch.device('cuda'), dtype = torch.float32)
+                target[torch.arange(target.size(0)),0] = 1
+
+                #sampled input : (batch_size, num_samples, 2, hidden_dim)
+                gold_input = torch.gather(input, 1, label_input.view(input.size(0), 1, 1, 1).expand(input.size(0), 1, input.size(2), input.size(3)))
+                masked_input = torch.ones_like(input).scatter(1, label_input.view(input.size(0), 1, 1, 1).expand(input.size(0), 1, input.size(2), input.size(3)), 0) # negative sample에 1 assign
+                idxs_ = masked_input.nonzero()[:, 1].reshape(-1, input.size(1) - label_input.size(1), input.size(2), input.size(3))
+                negative_input = torch.gather(input, 1, idxs_)
+                negative_indices = torch.randperm(self.top_k-1)[:num_samples]
+                negative_input = negative_input[:,negative_indices,:,:] # randomly chosen negative samples
+                sampled_input = torch.cat((gold_input, negative_input), dim = 1)
+                scores = torch.squeeze(self.model(sampled_input), dim = 2)
+                weights = (0.1)*torch.ones((input.size(0), num_samples + 1), device = torch.device('cuda'))
+                weights[torch.arange(weights.size(0)),0] = 1
+                criterion = torch.nn.BCEWithLogitsLoss(weight = weights)
+                loss = criterion(scores, target)
+            else:
+                scores=torch.squeeze(self.model(input), dim=2)
+                loss=F.cross_entropy(scores, label_input, reduction="mean")
         torch.set_printoptions(threshold=10_000)
         return loss, scores
 class MlpModule(nn.Module):
     def __init__(self,params, top_k=k, model_input=input_size):
         super(MlpModule, self).__init__()
         self.params=params
-        
-
-        
-        
         self.input_size=model_input 
         if params["bert_model"]=="bert-base-cased":
             self.input_size = 768*2
         self.fc=nn.Linear(self.input_size, self.input_size)
         self.fc2=nn.Linear(self.input_size, 1)
-        self.fc_red1=nn.Linear(self.input_size, self.params["dim_red"])
-        self.fc_red2=nn.Linear(self.params["dim_red"], self.params["dim_red"])
-        self.fc_red3=nn.Linear(self.params["dim_red"],1)
         self.dropout=nn.Dropout(0.1)
         self.layers = nn.ModuleList()
-        self.act_fn = nn.LeakyReLU()
+        if params["act_fn"] == "softplus":
+            self.act_fn = nn.Softplus()
+        if params["act_fn"] == "sigmoid":
+            self.act_fn = nn.Sigmoid()
+        elif params["act_fn"] == "tanh":
+            self.act_fn = nn.Tanh()
         self.current_dim = self.input_size
-        if not self.params["decoding"]:
+        if not self.params["decoder"]:
             if self.params["dim_red"]:
                 for i in range(self.params["layers"]):
                     self.layers.append(nn.Linear(self.current_dim, self.params["dim_red"]))
@@ -89,38 +114,18 @@ class MlpModule(nn.Module):
             self.layers.append(nn.Linear(int(self.current_dim), int(self.params["dim_red"])))
             self.current_dim = self.params["dim_red"]
             for i in range(self.params["layers"]-1):
-                    self.layers.append(nn.Linear(int(self.current_dim), int(self.current_dim/2)))
-                    self.current_dim /= 2
+                self.layers.append(nn.Linear(int(self.current_dim), int(self.current_dim/2)))
+                self.current_dim /= 2
+
         self.layers.append(nn.Linear(int(self.current_dim), 1))
-        # self.linear=nn.Sequential(
-        #     self.dropout,
-        #     self.fc,
-        #     self.act_fn
-        # )
-        # self.linear2=nn.Sequential(
-        #     self.dropout,
-        #     self.fc2,
-        #     self.act_fn
-        # )
-        # self.linear_red1=nn.Sequential(
-        #     self.dropout,
-        #     self.fc_red1,
-        #     self.act_fn
-        # )
-        # self.linear_red2=nn.Sequential(
-        #     self.dropout,
-        #     self.fc_red2,
-        #     self.act_fn
-        # )
-        # self.linear_red3=nn.Sequential(
-        #     self.dropout,
-        #     self.fc_red3,
-        #     self.act_fn
-        # )
+
+        ## projection과 linear mapping 구분
+        # relu나 sigmoid나 tanh
     def forward(self, input):
         input = torch.flatten(input, start_dim = 2)
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers[:-1]):
             input = self.act_fn(layer(self.dropout(input)))
+        input = self.layers[-1](self.dropout(input))
         return input
         # if not decoding: 
         #     if not self.params["dim_red"]:
