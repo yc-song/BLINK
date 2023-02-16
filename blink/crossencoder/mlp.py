@@ -61,24 +61,35 @@ class MlpModel(nn.Module):
             loss=F.cross_entropy(scores, label_input, reduction="mean")
         else:
             if not evaluate:
-                num_samples = 10
+                num_samples = 10 # the number of negative samples
                 label_input = torch.unsqueeze(label_input, dim = 1)
-                target = torch.zeros((input.size(0), num_samples + 1), device = torch.device('cuda'), dtype = torch.float32)
-                target[torch.arange(target.size(0)),0] = 1
-
-                #sampled input : (batch_size, num_samples, 2, hidden_dim)
+                # Making target tensor for BCELoss
+                # Target tensor shape: (batch_size, num_samples + 1)
+                # Target tensor looks like: [[1, 0, ... , 0], ... [1, 0, ..., 0]]
+                target = torch.zeros((input.size(0), num_samples + 1), device = torch.device('cuda'), dtype = torch.float32) 
+                target[torch.arange(target.size(0)),0] = 1 
+                # sampled input shape: (batch_size, num_samples + 1, 2, hidden_dim)
+                # sampled input consists of gold_input and negative_input
+                # gold_input : label-th tensor from each candidate
                 gold_input = torch.gather(input, 1, label_input.view(input.size(0), 1, 1, 1).expand(input.size(0), 1, input.size(2), input.size(3)))
+                # negative input: negative sample tensor whose shape is (batch_size, num_samples, 2, hidden_dim)
                 masked_input = torch.ones_like(input).scatter(1, label_input.view(input.size(0), 1, 1, 1).expand(input.size(0), 1, input.size(2), input.size(3)), 0) # negative sample에 1 assign
                 idxs_ = masked_input.nonzero()[:, 1].reshape(-1, input.size(1) - label_input.size(1), input.size(2), input.size(3))
                 negative_input = torch.gather(input, 1, idxs_)
+                # uniform sampling using 'torch.randperm'
                 negative_indices = torch.randperm(self.top_k-1)[:num_samples]
-                negative_input = negative_input[:,negative_indices,:,:] # randomly chosen negative samples
+                negative_input = negative_input[:,negative_indices,:,:] 
+                # concatenate gold_input and negative_input
                 sampled_input = torch.cat((gold_input, negative_input), dim = 1)
+                # Get scores by feeding sampled_input
                 scores = torch.squeeze(self.model(sampled_input), dim = 2)
+                # Assigning weights on BCELoss
+                # 0.1 for negatives and 1 for gold
                 weights = (0.1)*torch.ones((input.size(0), num_samples + 1), device = torch.device('cuda'))
                 weights[torch.arange(weights.size(0)),0] = 1
                 criterion = torch.nn.BCEWithLogitsLoss(weight = weights)
                 loss = criterion(scores, target)
+                print("loss: ", loss)
             else:
                 scores=torch.squeeze(self.model(input), dim=2)
                 loss=F.cross_entropy(scores, label_input, reduction="mean")
