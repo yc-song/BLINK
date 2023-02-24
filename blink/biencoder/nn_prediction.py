@@ -22,6 +22,7 @@ def get_topk_predictions(
     silent,
     logger,
     cand_cls_list,
+    cand_cls_list,
     top_k=10,
     is_zeshel=False,
     save_predictions=False,
@@ -50,6 +51,7 @@ def get_topk_predictions(
         candidate_pool = [candidate_pool]
         cand_encode_list = [cand_encode_list]
         cand_cls_list=[cand_cls_list]
+        cand_cls_list=[cand_cls_list]
 
     logger.info("World size : %d" % world_size)
 
@@ -71,6 +73,8 @@ def get_topk_predictions(
             context_input, _, label_ids = batch
             src = 0
         cand_encode_list[src] = cand_encode_list[src].to(device)
+        cand_cls_list[src] = cand_cls_list[src].to(device)
+
         cand_cls_list[src] = cand_cls_list[src].to(device)
 
         scores, embedding_ctxt = reranker.score_candidate(
@@ -169,8 +173,8 @@ def get_topk_predictions(
 
     logger.info(res.output())
 
-    nn_context = torch.FloatTensor(nn_context)
-    nn_candidates = torch.FloatTensor(nn_candidates)
+    nn_context = torch.FloatTensor(nn_context) # (10000,1024)
+    nn_candidates = torch.FloatTensor(nn_candidates) # (10000,64,1024) -> (10000,65,1024)
     nn_labels = torch.LongTensor(nn_labels)
     nn_scores = torch.FloatTensor(nn_scores)
 

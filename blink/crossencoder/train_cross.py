@@ -167,6 +167,7 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=F
             logger.info("Macro accuracy: %.5f" % (macro / num))
             logger.info("Micro accuracy: %.5f" % normalized_eval_accuracy)
     
+    
     else:
         if logger:
             logger.info("Eval accuracy: %.5f" % normalized_eval_accuracy)
@@ -221,6 +222,7 @@ def main(params):
     epoch_idx_global = 0
     previous_step = 0
     # Init model
+    if params["architecture"]=="mlp":
     if params["architecture"]=="mlp":
         reranker= MlpModel(params)
     else:
@@ -506,6 +508,7 @@ def main(params):
         else:
             iter_ = tqdm(train_dataloader, desc="Batch")
             iter_valid = valid_dataloader
+        print_interval=len(iter_)
 
         part = 0
         model.train()
@@ -547,7 +550,7 @@ def main(params):
                     "Step {} - epoch {} average training loss: {}\n".format(
                         step,
                         epoch_idx,
-                        tr_loss / (params["print_interval"] * grad_acc_steps),
+                        tr_loss / (print_interval * grad_acc_steps),
                     )
                 )
                 wandb.log({
@@ -598,6 +601,16 @@ def main(params):
                         os.remove(each_file_path)
         # utils.save_model(model, tokenizer, epoch_output_folder_path)
         # reranker.save_model(epoch_output_folder_path)
+        logger.info("Evaluation on the training dataset")
+        train_acc=evaluate(
+            reranker,
+            train_dataloader,
+            device=device,
+            logger=logger,
+            context_length=context_length,
+            zeshel=params["zeshel"],
+            silent=params["silent"],
+        )
 
         if params["architecture"]=="mlp":
             logger.info("Loss on the validation dataset")
