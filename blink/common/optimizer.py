@@ -72,10 +72,8 @@ def get_bert_optimizer(models, type_optimization, learning_rate, fp16=False):
         lr=learning_rate, 
         correct_bias=False
     )
-
     if fp16:
         optimizer = fp16_optimizer_wrapper(optimizer)
-
     return optimizer
 
 

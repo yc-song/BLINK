@@ -30,7 +30,8 @@ class BertEncoder(nn.Module):
         output_bert, output_pooler = self.bert_model(
             token_ids, segment_ids, attention_mask
         )
-        # get embedding of [M_s] token (context: token_id=1, candidate: token_id=3)
+        # get embedding of [M_s] and [ENT] token (context: token_id=1, candidate: token_id=2)
+        torch.set_printoptions(threshold=10_000)
         if (data_type =="context"):
             m_s_index=(token_ids==1).nonzero(as_tuple=True)[1]
         elif (data_type=="candidate"):
@@ -41,6 +42,7 @@ class BertEncoder(nn.Module):
             embeddings = output_pooler
         else:
             embeddings=output_bert[range(output_bert.shape[0]),m_s_index]
+
         cls_token=output_bert[:,0,:]
         # in case of dimensionality reduction
         if self.additional_linear is not None:

@@ -11,11 +11,17 @@ import importlib
 import os
 import sys
 import datetime
+import json
+
+with open('/home/jongsong/BLINK/blink/common/crossencoder_config_ffnn.json') as f:
+    config = json.load(f)
+    print(config)
 
 
-ENT_START_TAG = "[unused0]"
-ENT_END_TAG = "[unused1]"
-ENT_TITLE_TAG = "[unused2]"
+
+ENT_START_TAG = "[unused1]"
+ENT_END_TAG = "[unused2]"
+ENT_TITLE_TAG = "[unused3]"
 
 
 class BlinkParser(argparse.ArgumentParser):
@@ -72,20 +78,21 @@ class BlinkParser(argparse.ArgumentParser):
         )
         parser.add_argument(
             "--data_parallel",
-            action="store_true",
+            default = config["data_parallel"],
+            type = bool,
             help="Whether to distributed the candidate generation process.",
         )
         parser.add_argument(
             "--no_cuda", action="store_true", 
             help="Whether not to use CUDA when available",
         )
-        parser.add_argument("--top_k", default=10, type=int) 
+        parser.add_argument("--top_k", default=config["top_k"], type=int) 
         parser.add_argument(
             "--seed", type=int, default=52313, help="random seed for initialization"
         )
         parser.add_argument(
             "--zeshel",
-            default=True,
+            default=config["zeshel"],
             type=bool,
             help="Whether the dataset is from zeroshot.",
         )
@@ -97,7 +104,21 @@ class BlinkParser(argparse.ArgumentParser):
         parser = self.add_argument_group("Model Arguments")
         parser.add_argument(
             "--layers",
-            default=6,
+            default=config["layers"],
+            type=int,
+            help="number of layers for mlp structure",
+        )
+        parser.add_argument(
+            "--with_mlp", action="store_true", help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
+            "--act_fn",
+            default=config["act_fn"],
+            help="softplus, sigmoid, tanh",
+        )
+        parser.add_argument(
+            "--step_size",
+            default=config["step_size"],
             type=int,
             help="number of layers for mlp structure",
         )
@@ -111,7 +132,7 @@ class BlinkParser(argparse.ArgumentParser):
         )
         parser.add_argument(
             "--max_context_length",
-            default=128,
+            default=config["max_context_length"],
             type=int,
             help="The maximum total context input sequence length after WordPiece tokenization. \n"
             "Sequences longer than this will be truncated, and sequences shorter \n"
@@ -119,7 +140,7 @@ class BlinkParser(argparse.ArgumentParser):
         )
         parser.add_argument(
             "--max_cand_length",
-            default=128,
+            default=config["max_cand_length"],
             type=int,
             help="The maximum total label input sequence length after WordPiece tokenization. \n"
             "Sequences longer than this will be truncated, and sequences shorter \n"
@@ -134,10 +155,16 @@ class BlinkParser(argparse.ArgumentParser):
         )
         parser.add_argument(
             "--bert_model",
-            default="bert-base-uncased",
+            default=config["bert_model"],
             type=str,
             help="Bert pre-trained model selected in the list: bert-base-uncased, "
             "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.",
+        )
+        parser.add_argument(
+            "--architecture",
+            default=config["architecture"],
+            type=str,
+            help="mlp, bert, roberta, special_token, raw_context_text",
         )
         parser.add_argument(
             "--pull_from_layer", type=int, default=-1, help="Layers to pull from BERT",
@@ -153,29 +180,68 @@ class BlinkParser(argparse.ArgumentParser):
         )
         parser.add_argument(
             "--add_linear",
-            action="store_true",
+            default= False,
+            type= bool,
             help="Whether to add an additonal linear projection on top of BERT.",
         )
         parser.add_argument(
             "--data_path",
-            default="data/zeshel",
+            default=config["data_path"],
             type=str,
             help="The path to the train data.",
         )
         parser.add_argument(
             "--output_path",
-            default=None,
+            default=config["output_path"],
             type=str,
-            required=True,
             help="The output directory where generated output file (model, etc.) is to be dumped.",
         )
         parser.add_argument(
             "--wandb",
-            default=None,
+            default=config["wandb"],
+            type=str,
+            help="wandb project name.",
+        )
+        parser.add_argument(
+            "--resume",
+            default=config["resume"],
+            type=bool,
+            help="wandb project name.",
+        )
+
+        parser.add_argument(
+            "--run_id",
+            default=config["run_id"],
             type=str,
             help="wandb project name.",
         )
 
+
+        parser.add_argument(
+            "--without_64",
+            default=config["without_64"],
+            type=bool,
+            help="to include 64 or not",
+        )
+        parser.add_argument(
+            "--timeout",
+            default=config["timeout"],
+            type=int,
+            help="timeout minutes.",
+        )
+
+        parser.add_argument(
+            "--decoder",
+            default=config["decoder"],
+            type=bool,
+            help="decoder strucutre or not.",
+        )
+        parser.add_argument(
+            "--split",
+            default=config["split"],
+            type=int,
+            help="split dataset into N chunks. (because of out of memory)",
+        )
         
 
 
@@ -187,6 +253,37 @@ class BlinkParser(argparse.ArgumentParser):
         parser.add_argument(
             "--evaluate", action="store_true", help="Whether to run evaluation."
         )
+
+        parser.add_argument(
+            "--scheduler_gamma",
+            default=config["scheduler_gamma"],
+            type=float,
+            help="The txt file where the the evaluation results will be written.",
+        )
+        parser.add_argument(
+            "--sampling",
+            default=config["sampling"],
+            type=bool,
+            help="The txt file where the the evaluation results will be written.",
+        )
+        parser.add_argument(
+            "--binary_loss",
+            default=config["binary_loss"],
+            type=bool,
+            help="Binary cross entropy loss or multi class cross entropy loss.",
+        )
+        parser.add_argument(
+            "--hard_negative",
+            default=config["hard_negative"],
+            type=bool,
+            help="Random sampling or hard negative mining.",
+        )
+        parser.add_argument(
+            "--weight_decay",
+            default=config["scheduler_gamma"],
+            type=float,
+            help="The txt file where the the evaluation results will be written.",
+        )
         parser.add_argument(
             "--output_eval_file",
             default=None,
@@ -194,54 +291,54 @@ class BlinkParser(argparse.ArgumentParser):
             help="The txt file where the the evaluation results will be written.",
         )
         parser.add_argument(
-            "--train_batch_size", default=8, type=int, 
+            "--train_batch_size", default=config["train_batch_size"], type=int, 
             help="Total batch size for training."
         )
         parser.add_argument("--max_grad_norm", default=1.0, type=float)
         parser.add_argument(
             "--learning_rate",
-            default=3e-5,
+            default=config["learning_rate"],
             type=float,
             help="The initial learning rate for Adam.",
         )
         parser.add_argument(
             "--num_train_epochs",
-            default=1,
+            default=config["num_train_epochs"],
             type=int,
             help="Number of training epochs.",
         )
         parser.add_argument(
             "--dim_red",
-            default=0,
+            default=config["dim_red"],
             type=int,
             help="first dimension",
         )
         parser.add_argument(
             "--train_size",
-            default=10000,
+            default=config["train_size"],
             type=int,
             help="dataset size of train set",
         )
         parser.add_argument(
             "--valid_size",
-            default=10000,
+            default=config["valid_size"],
             type=int,
             help="dataset size of dev set",
         )
         parser.add_argument(
             "--patience",
-            default=20,
+            default=config["patience"],
             type=int,
             help="patience for early stopping.",
         )
         parser.add_argument(
-            "--print_interval", type=int, default=100, 
+            "--print_interval", type=int, default=50, 
             help="Interval of loss printing",
         )
         parser.add_argument(
            "--eval_interval",
             type=int,
-            default=100,
+            default=config["eval_interval"],
             help="Interval for evaluation during training",
         )
         parser.add_argument(
@@ -264,7 +361,7 @@ class BlinkParser(argparse.ArgumentParser):
         parser.add_argument(
             "--type_optimization",
             type=str,
-            default="all_encoder_layers",
+            default=config["type_optimization"],
             help="Which type of layers to optimize in BERT",
         )
         parser.add_argument(
@@ -272,20 +369,16 @@ class BlinkParser(argparse.ArgumentParser):
             help="Whether to shuffle train data",
         )
         parser.add_argument(
-            "--save", type=bool, default=True, 
+            "--save", type=bool, default=config["save"], 
             help="directory to save models",
-        )
-        parser.add_argument(
-            "--image_path", type=str, default='0'
         )
         parser.add_argument(
             "--dim", type=int, default=1024
         )
         parser.add_argument(
             "--optimizer",
-            default="Adam",
+            default=config["optimizer"],
             type=str,
-            required=True,
             help="optimizer.",
         )
 
@@ -295,7 +388,7 @@ class BlinkParser(argparse.ArgumentParser):
         """
         parser = self.add_argument_group("Model Evaluation Arguments")
         parser.add_argument(
-            "--eval_batch_size", default=8, type=int,
+            "--eval_batch_size", default=config["eval_batch_size"], type=int,
             help="Total batch size for evaluation.",
         )
         parser.add_argument(

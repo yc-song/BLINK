@@ -29,6 +29,8 @@ from pytorch_transformers.tokenization_bert import BertTokenizer
 from pytorch_transformers.modeling_utils import WEIGHTS_NAME
 
 from blink.biencoder.biencoder import BiEncoderRanker, load_biencoder
+from blink.biencoder.biencoderwithmlp import BiEncoderRankerwithMLP, load_biencoderwithMLP
+
 import logging
 
 import blink.candidate_ranking.utils as utils
@@ -114,7 +116,7 @@ def main(params):
     logger = utils.get_logger(params["output_path"])
 
     # Init model
-    reranker = BiEncoderRanker(params)
+        reranker = BiEncoderRanker(params)
     tokenizer = reranker.tokenizer
     model = reranker.model
 
@@ -148,7 +150,6 @@ def main(params):
     # Load train data
     train_samples = utils.read_dataset("train", params["data_path"])
     logger.info("Read %d train samples." % len(train_samples))
-
     train_data, train_tensor_data = data.process_mention_data(
         train_samples,
         tokenizer,

@@ -1,0 +1,71 @@
+command:
+  - python
+  - ${program}
+  - ${args}
+method: bayes
+metric:
+  goal: maximize
+  name: val_acc
+name: 2 or 4 or 6 layers
+parameters:
+  bert_model:
+    values:
+      - mlp
+  data_path:
+    values:
+      - models/zeshel/top64_candidates_base/
+  dim_red:
+    values:
+      - 1024
+  eval_batch_size:
+    values:
+      - 512
+  eval_interval:
+    values:
+      - 200
+  layers:
+    values: [2,4]
+  learning_rate:
+    distribution: log_uniform
+    max: -2.302
+    min: -18.42
+  max_cand_length:
+    values:
+      - 128
+  max_context_length:
+    values:
+      - 128
+  num_train_epochs:
+    values:
+      - 1000
+  optimizer:
+    values:
+      - AdamW
+  output_path:
+    values:
+      - models/zeshel/crossencoder/2layers_adam
+  patience:
+    values:
+      - 10
+  save:
+    values:
+      - true
+  train_batch_size:
+    values:
+      - 64
+  train_size:
+    values:
+      - 49275
+  type_optimization:
+    values:
+      - all_encoder_layers
+  valid_size:
+    values:
+      - 10000
+  wandb:
+    values:
+      - semi-crossencoder
+  zeshel:
+    values:
+      - true
+program: /home/jongsong/BLINK/blink/crossencoder/train_cross.py

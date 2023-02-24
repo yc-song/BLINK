@@ -1,0 +1,35 @@
+command:
+  - python
+  - ${program}
+  - ${args}
+method: bayes
+metric:
+  goal: maximize
+  name: acc/val_acc
+name: FFNN (new architecture, beta version)
+parameters:
+  dim_red:
+    distribution: q_uniform
+    min: 512
+    max: 2048
+    q: 512
+  layers:
+    distribution: q_uniform
+    min: 2
+    max: 4
+    q: 2
+  learning_rate:
+    distribution: log_uniform
+    max: -6.9078
+    min: -9.21
+  train_batch_size:
+    distribution: q_uniform
+    min: 32
+    max: 512
+    q: 32
+  decoding:
+    distribution: int_uniform
+    min: 0
+    max: 1
+
+program: /home/jongsong/BLINK/blink/crossencoder/train_cross.py

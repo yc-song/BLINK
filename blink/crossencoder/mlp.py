@@ -14,13 +14,14 @@ from blink.common.ranker_base import get_model_obj
 from pytorch_transformers.tokenization_bert import BertTokenizer
 from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from blink.common.params import BlinkParser
+from torchsummary import summary
 
 def load_mlp(params):
     # Init model
     crossencoder = MlpModel(params)
     return crossencoder
-k=64
-input=2048 #(64,256)
+k=256
+input_size=768*2 #(64,256)
 ## model이랑 module, ranker 나눠서 modeule이랑 ranker에서 model 호출
 class MlpModel(nn.Module):
     def __init__(self,params, top_k=k, model_input=input):
@@ -35,8 +36,9 @@ class MlpModel(nn.Module):
                 "bert-base-cased"
             )
         self.build_model()
+        self.top_k = top_k
         self.model = self.model.to(self.device)
-        self.model = torch.nn.DataParallel(self.model)
+        # self.model = torch.nn.DataParallel(self.model)
     def build_model(self):
         self.model=MlpModule(self.params)
     def save_model(self, output_dir):
@@ -49,56 +51,142 @@ class MlpModel(nn.Module):
         else:
             state_dict = torch.load(fname)
         self.model.load_state_dict(state_dict)
-    def forward(self, input, label_input, context_length):
-        scores=torch.squeeze(self.model(input, label_input, context_length), dim=2)
-        # print("label", label_input)
-        # print("scores", scores)
-        loss=F.cross_entropy(scores, label_input, reduction="mean")
+    def forward(self, input, label_input, context_length, bi_encoder_score = None, evaluate = False):
+        # summary(self.model, input_size=(1, 2, 1024))
+
+        # input shape: (batch size, top_k, 2, bert_hidden_dimension)
+        # score shape: (batch_size, top_k)
+        if not self.params["sampling"]:
+            scores=torch.squeeze(self.model(input), dim=2)
+            if self.params["binary_loss"]:
+                criterion = torch.nn.BCEWithLogitsLoss(weight = weights)
+            else:
+                criterion = torch.nn.CrossEntropyLoss(weight = weights)
+            loss=criterion(scores, label_input, reduction="mean")
+        else:    
+            if not evaluate:
+                num_samples = 30 # the number of negative samples
+                label_input = torch.unsqueeze(label_input, dim = 1)
+                # Making target tensor for BCELoss
+                # Target tensor shape: (batch_size, num_samples + 1)
+                # Target tensor looks like: [[1, 0, ... , 0], ... [1, 0, ..., 0]]
+                target = torch.zeros((input.size(0), num_samples + 1), device = torch.device('cuda'), dtype = torch.float32) 
+                target[torch.arange(target.size(0)),0] = 1 
+                # sampled input shape: (batch_size, num_samples + 1, 2, hidden_dim)
+                # sampled input consists of gold_input and negative_input
+                # gold_input : label-th tensor from each candidate
+                gold_input = torch.gather(input, 1, label_input.view(input.size(0), 1, 1, 1).expand(input.size(0), 1, input.size(2), input.size(3)))
+                masked_input = torch.ones_like(input).scatter(1, label_input.view(input.size(0), 1, 1, 1).expand(input.size(0), 1, input.size(2), input.size(3)), 0) # negative sample에 1 assign
+                idxs_ = masked_input.nonzero()[:, 1].reshape(-1, input.size(1) - label_input.size(1), input.size(2), input.size(3))
+                torch.set_printoptions(threshold = 1000000)
+                negative_input = torch.gather(input, 1, idxs_)
+                # negative input: negative sample tensor whose shape is (batch_size, num_samples, 2, hidden_dim)
+                if self.params["hard_negative"] and bi_encoder_score is not None:
+                    softmax = torch.nn.Softmax(dim = 1)
+                    masked_score = torch.ones_like(bi_encoder_score).scatter(1, label_input.view(bi_encoder_score.size(0), 1).expand(bi_encoder_score.size(0), 1), 0) # negative sample에 1 assign
+                    idxs_ = masked_score.nonzero()[:, 1].reshape(-1, masked_score.size(1) - label_input.size(1))
+                    bi_encoder_score = torch.gather(bi_encoder_score, 1, idxs_)
+                    bi_encoder_score = softmax(bi_encoder_score)
+                    samples = torch.multinomial(bi_encoder_score, num_samples)
+                    samples = samples.unsqueeze(2).unsqueeze(3).expand(-1 , -1 , 2 , 768)
+                    negative_input = torch.gather(negative_input, 1, samples)
+                    sampled_input = torch.cat((gold_input, negative_input), dim = 1)
+                else:
+                    # uniform sampling using 'torch.randperm'
+                    negative_indices = torch.randperm(self.top_k-1)[:num_samples]
+                    negative_input = negative_input[:,negative_indices,:,:] 
+                    # concatenate gold_input and negative_input
+                    sampled_input = torch.cat((gold_input, negative_input), dim = 1)
+                    # Get scores by feeding sampled_input
+                scores = torch.squeeze(self.model(sampled_input), dim = 2)
+                # Assigning weights on BCELoss
+                # 0.1 for negatives and 1 for gold
+                if self.params["binary_loss"]:
+                    weights = (0.1)*torch.ones((input.size(0), num_samples + 1), device = torch.device('cuda'))
+                    weights[torch.arange(weights.size(0)),0] = 1
+                    criterion = torch.nn.BCEWithLogitsLoss(weight = weights)
+                else:
+                    weights = (0.1)*torch.ones((num_samples + 1), device = torch.device('cuda'))
+                    weights[0] = 1
+                    criterion = torch.nn.CrossEntropyLoss(weight = weights)
+                loss = criterion(scores, target)
+
+            else:
+                scores=torch.squeeze(self.model(input), dim=2)
+                loss=F.cross_entropy(scores, label_input, reduction="mean")
         torch.set_printoptions(threshold=10_000)
-        print(label_input)
         return loss, scores
 class MlpModule(nn.Module):
-    def __init__(self,params, top_k=k, model_input=input):
+    def __init__(self,params, top_k=k, model_input=input_size):
         super(MlpModule, self).__init__()
         self.params=params
-        self.fc=nn.Linear(model_input, model_input)
-        self.fc2=nn.Linear(model_input, 1)
-        self.fc_red1=nn.Linear(model_input, self.params["dim_red"])
-        self.fc_red2=nn.Linear(self.params["dim_red"], self.params["dim_red"])
-        self.fc_red3=nn.Linear(self.params["dim_red"],1)
+        self.input_size=model_input 
+        if params["bert_model"]=="bert-base-cased":
+            self.input_size = 768*2
+        self.fc=nn.Linear(self.input_size, self.input_size)
+        self.fc2=nn.Linear(self.input_size, 1)
         self.dropout=nn.Dropout(0.1)
-        self.act_fn = nn.LeakyReLU()
-        self.linear=nn.Sequential(
-            self.dropout,
-            self.fc,
-            self.act_fn,
-        )
-        self.linear2=nn.Sequential(
-            self.dropout,
-            self.fc2
-        )
-        self.linear_red1=nn.Sequential(
-            self.dropout,
-            self.fc_red1
-        )
-        self.linear_red2=nn.Sequential(
-            self.dropout,
-            self.fc_red2
-        )
-        self.linear_red3=nn.Sequential(
-            self.dropout,
-            self.fc_red3
-        )
-    def forward(self, input, label_input, context_length):
-        if not self.params["dim_red"]:
-            for i in range(self.params["layers"]-1):
-                input=self.linear(input)
-            return self.linear2(input)
+        self.layers = nn.ModuleList()
+        if params["act_fn"] == "softplus":
+            self.act_fn = nn.Softplus()
+        if params["act_fn"] == "sigmoid":
+            self.act_fn = nn.Sigmoid()
+        elif params["act_fn"] == "tanh":
+            self.act_fn = nn.Tanh()
+        self.current_dim = self.input_size
+        if not self.params["decoder"]:
+            if self.params["dim_red"]:
+                for i in range(self.params["layers"]):
+                    self.layers.append(nn.Linear(self.current_dim, self.params["dim_red"]))
+                    self.current_dim = self.params["dim_red"]
+            else: 
+                for i in range(self.params["layers"]):
+                    self.layers.append(nn.Linear(self.current_dim, self.current_dim))
         else:
-            input=self.linear_red1(input)
-            for i in range(self.params["layers"]-2):
-                input=self.linear_red2(input)
-            return self.linear_red3(input)
+            self.layers.append(nn.Linear(int(self.current_dim), int(self.params["dim_red"])))
+            self.current_dim = self.params["dim_red"]
+            for i in range(self.params["layers"]-1):
+                self.layers.append(nn.Linear(int(self.current_dim), int(self.current_dim/2)))
+                self.current_dim /= 2
+
+        self.layers.append(nn.Linear(int(self.current_dim), 1))
+
+    def forward(self, input):
+        input = torch.flatten(input, start_dim = 2)
+        for i, layer in enumerate(self.layers[:-1]):
+            input = self.act_fn(layer(self.dropout(input)))
+        input = self.layers[-1](self.dropout(input))
+        return input
+        # if not decoding: 
+        #     if not self.params["dim_red"]:
+        #         # print("1-1")
+        #         for i in range(self.params["layers"]):
+        #             # print("1-2")
+        #             input=self.linear(input)
+        #         return self.linear2(input)
+        #     else:
+        #         # print("2-1")
+        #         input=self.linear_red1(input)
+        #         for i in range(self.params["layers"]-1):
+        #             # print("2-2")
+        #             input=self.linear_red2(input)
+        #         input = self.linear_red3(input) 
+        #         return input
+        # else:
+        #     input=self.linear_red1(input)
+        #     for i in range(self.params["layers"]-1):
+        #         input_shape = input.size(2)
+        #         fc_red4 = nn.Linear(input_shape, input_shape/2)
+        #         input = self.dropout(input)
+        #         input = fc_red4(input)
+        #         input = self.act_fn(input)
+        #     input_shape = input.size(2)            
+        #     fc_red5 = nn.Linear(input_shape, 1)
+        #     input = self.dropout(input)
+        #     input = fc_red5(input)
+        #     input = self.act_fn(input)
+            # return input
+
 # class BertPreTrainedModel(PreTrainedModel):
 #     """ An abstract class to handle weights initialization and
 #         a simple interface for dowloading and loading pretrained models.

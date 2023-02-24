@@ -10,7 +10,7 @@ import sys
 import json
 import torch
 import logging
-
+from scipy.stats import rankdata
 import numpy as np
 
 from collections import OrderedDict
@@ -26,16 +26,14 @@ def read_dataset(dataset_name, preprocessed_json_data_parent_folder, debug=False
     txt_file_path = os.path.join(preprocessed_json_data_parent_folder, file_name)
 
     samples = []
-
     with io.open(txt_file_path, mode="r", encoding="utf-8") as file:
         for i, line in enumerate(file):
-            # if i<20000:
-            #     samples.append(json.loads(line.strip()))
-            #     if debug and len(samples) > 200:
-            #         break
             samples.append(json.loads(line.strip()))
             if debug and len(samples) > 200:
                 break
+            # samples.append(json.loads(line.strip()))
+            # if debug and len(samples) > 200:
+            #     break
     return samples
 
 
@@ -60,7 +58,7 @@ def _truncate_seq_pair(tokens_a, tokens_b, max_length):
         if len(tokens_a) > len(tokens_b):
             tokens_a.pop()
         else:
-            tokens_b.pop()
+            tokens_b.pop() 
 
 
 def eval_precision_bm45_dataloader(dataloader, ks=[1, 5, 10], number_of_samples=None):
@@ -76,7 +74,6 @@ def eval_precision_bm45_dataloader(dataloader, ks=[1, 5, 10], number_of_samples=
             for k in ks:
                 if label <= k:
                     p[k] += 1
-
     for k in ks:
         if number_of_samples is None:
             p[k] /= len(label_ids)
@@ -88,8 +85,70 @@ def eval_precision_bm45_dataloader(dataloader, ks=[1, 5, 10], number_of_samples=
 
 def accuracy(out, labels):
     outputs = np.argmax(out, axis=1)
+    # print("outputs", outputs)
+    # twomax = np.partition(out, -2)[:, -2:].T
+    # default = -1
+    # outputs=np.where(twomax[0] != twomax[1], np.argmax(out, -1), default)
+    # print("outputs", outputs)
+    # print("labels", labels)
+    # print("max outputs", outputs)
+    # print("label", labels)
+    # print("ranking", np.take(idx_array, labels))
     return np.sum(outputs == labels), outputs == labels
 
+def accuracy_label64(out, labels, label_64 = True):
+    if label_64 == True:
+        mask= (labels[:]==64)
+    else:
+        mask= (labels[:]!=64)
+
+    outputs = np.argmax(out, axis=1)
+    # print("outputs", outputs)
+    # print("labels", labels)
+    # print(np.sum(outputs[mask]==labels[mask]), np.sum(mask==True))
+    # return (total success of prediction, total # of label 64)
+    return np.sum(outputs[mask]==labels[mask]), np.sum(mask==True)
+
+def mrr_label64(out, labels):
+    mask= (labels[:]==64)
+    masked_labels=labels[mask]
+    idx_array = rankdata(-out[mask], axis=1, method='min')
+    rank = np.take_along_axis(idx_array, masked_labels[:,None], axis=1)
+    return np.sum(1/rank)
+
+
+def mrr(out, labels, train = True, input = None): #implement mean reciprocal rank
+    idx_array = rankdata(-out, axis=1, method='min')
+    
+    rank = np.take_along_axis(idx_array, labels[:, None], axis=1)
+    #print out best and worst cases
+    # if train == False: 
+    #     ranks=[1,65]
+    #     for r in ranks:
+    #         mask= (rank[:,0]==r)
+    #         mask_outputs= outputs[mask]
+    #         mask_labels=labels[mask]
+    #         if np.any(mask):
+    #             print("\n rank", r)
+    #             print("logits", out[mask])
+    #             print("input shape", input[mask,mask_outputs,:,:].shape)
+    #             print("input for prediction", input[mask,mask_outputs,:,:][0])
+    #             print("input for gold", input[mask,mask_labels,:,:][0])
+
+
+    return np.sum(1/rank)
+
+def recall(out, labels, k=4):
+    idx_array = rankdata(-out, axis=1, method='min')
+    rank = np.take_along_axis(idx_array, labels[:,None], axis=1)
+    # print("labels_recall", labels[:,None])
+    # print("idx_array", idx_array)
+    # print("rank", rank.T)
+    # print("rank", rank)
+    # print(rank<=k)
+    # print(np.count_nonzero(rank<=k))
+    return np.count_nonzero(rank<=k)
+    
 def remove_module_from_state_dict(state_dict):
     new_state_dict = OrderedDict()
     for key, value in state_dict.items():

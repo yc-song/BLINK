@@ -232,7 +232,7 @@ def main(params):
         logger,
         cand_pool_path,
     )       
-    candidate_cls=None
+    candidate_cls = None
     candidate_encoding = None
     if cand_encode_path is not None:
         # try to load candidate encoding from path
@@ -256,55 +256,61 @@ def main(params):
         )
 
         if cand_encode_path is not None:
-            # Save candidate encoding to avoid re-compute
-            logger.info("Saving candidate encoding to file " + cand_encode_path)
-            torch.save(candidate_encoding, cand_encode_path)
-            torch.save(candidate_cls, cand_cls_path)
+                # Save candidate encoding to avoid re-compute
+                logger.info("Saving candidate encoding to file " + cand_encode_path)
+                torch.save(candidate_encoding, cand_encode_path)
+                torch.save(candidate_cls, cand_cls_path)
 
 
     test_samples = utils.read_dataset(params["mode"], params["data_path"])
     logger.info("Read %d test samples." % len(test_samples))
-   
-    test_data, test_tensor_data = data.process_mention_data(
-        test_samples,
-        tokenizer,
-        params["max_context_length"],
-        params["max_cand_length"],
-        context_key=params['context_key'],
-        silent=params["silent"],
-        logger=logger,
-        debug=params["debug"],
-    )
-    test_sampler = SequentialSampler(test_tensor_data)
-    test_dataloader = DataLoader(
-        test_tensor_data, 
-        sampler=test_sampler, 
-        batch_size=params["eval_batch_size"]
-    )
-    
-    save_results = params.get("save_topk_result")
-    new_data = nnquery.get_topk_predictions(
-        reranker,
-        test_dataloader,
-        candidate_pool,
-        candidate_encoding,
-        params["silent"],
-        logger,
-        candidate_cls,
-        params["top_k"],
-        params.get("zeshel", None),
-        save_results,
-    )
-
-    if save_results: 
-        save_data_dir = os.path.join(
-            params['output_path'],
-            "top%d_candidates" % params['top_k'],
+    for i in range(params["split"]):
+        print(int((i+1)*len(test_samples)/params["split"]))
+        test_samples_splitted = test_samples[int(i*len(test_samples)/params["split"]):int((i+1)*len(test_samples)/params["split"])]
+        test_data, test_tensor_data = data.process_mention_data(
+            test_samples_splitted,
+            tokenizer,
+            params["max_context_length"],
+            params["max_cand_length"],
+            context_key=params['context_key'],
+            silent=params["silent"],
+            logger=logger,
+            debug=params["debug"],
         )
-        if not os.path.exists(save_data_dir):
-            os.makedirs(save_data_dir)
-        save_data_path = os.path.join(save_data_dir, "%s.t7" % params['mode'])
-        torch.save(new_data, save_data_path)
+        test_sampler = SequentialSampler(test_tensor_data)
+        test_dataloader = DataLoader(
+            test_tensor_data, 
+            sampler=test_sampler, 
+            batch_size=params["eval_batch_size"]
+        )
+        
+        save_results = params.get("save_topk_result")
+        new_data = nnquery.get_topk_predictions(
+            reranker,
+            test_dataloader,
+            candidate_pool,
+            candidate_encoding,
+            params["silent"],
+            logger,
+            candidate_cls,
+            params["top_k"],
+            params.get("zeshel", None),
+            save_results,
+            params=params
+        )
+
+        if save_results: 
+            save_data_dir = os.path.join(
+                params['output_path'],
+                "top%d_candidates" % params['top_k'],
+            )
+            if not os.path.exists(save_data_dir):
+                os.makedirs(save_data_dir)
+            save_data_path = os.path.join(save_data_dir, "{}{}.t7".format(params["mode"], i))
+            torch.save(new_data, save_data_path)
+
+        
+    
 
 
 if __name__ == "__main__":

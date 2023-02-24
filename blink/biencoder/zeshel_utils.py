@@ -68,7 +68,7 @@ class Stats():
         self.cnt = 0
         self.hits = []
         self.top_k = top_k
-        self.rank = [1, 4, 8, 16, 32, 64, 100, 128, 256, 512]
+        self.rank = [1, 4, 8, 16, 32, 64, 100, 128, 256, 512, 1000]
         self.LEN = len(self.rank) 
         for i in range(self.LEN):
             self.hits.append(0)

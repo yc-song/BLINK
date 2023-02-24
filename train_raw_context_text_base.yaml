@@ -1,0 +1,72 @@
+command:
+  - python
+  - ${program}
+  - ${args}
+method: bayes
+metric:
+  goal: maximize
+  name: val_acc
+name: raw_context_bert
+parameters:
+  bert_model:
+    values:
+      - bert-base-cased
+  architecture:
+    values:
+      - raw_context_text
+  data_path:
+    values:
+      - models/zeshel/top64_candidates_base_raw_text/ 
+  learning_rate:
+    distribution: log_uniform
+    max: -2.302
+    min: -18.42
+  num_train_epochs:
+    values:
+      - 50
+  max_context_length:
+    values:
+      - 128
+  max_cand_length:
+    values:
+      - 128
+  train_batch_size:
+    values:
+      - 2
+  eval_batch_size:
+    values:
+      - 4
+  eval_interval:
+    values:
+      - 500
+  output_path:
+    values:
+      - models/zeshel/crossencoder/2layers_adam
+  patience:
+    values:
+      - 10
+  layers:
+    values:
+      - 2
+  save:
+    values:
+      - true
+  optimizer:
+    values:
+      - Adam
+  train_size:
+    values:
+      - 49275
+  type_optimization:
+    values:
+      - all_encoder_layers
+  valid_size:
+    values:
+      - 10000
+  wandb:
+    values:
+      - raw_context_text
+  zeshel:
+    values:
+      - true
+program: /home/jongsong/BLINK/blink/crossencoder/train_cross.py

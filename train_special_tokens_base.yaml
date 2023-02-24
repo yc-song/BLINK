@@ -1,0 +1,25 @@
+command:
+  - python
+  - ${program}
+  - ${args}
+method: bayes
+metric:
+  goal: maximize
+  name: val_acc
+name: Speical Tokens
+parameters:
+  learning_rate:
+    distribution: log_uniform
+    max: -6.907
+    min: -13.81
+  wandb:
+    values:
+      - special-tokens
+  architecture:
+    values:
+      - special_token
+  add_linear:
+    values:
+      - True
+
+program: /home/jongsong/BLINK/blink/crossencoder/train_cross.py

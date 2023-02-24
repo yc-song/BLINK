@@ -21,9 +21,11 @@ def get_topk_predictions(
     cand_encode_list,
     silent,
     logger,
+    cand_cls_list,
     top_k=10,
     is_zeshel=False,
     save_predictions=False,
+    params=None
 ):
     reranker.model.eval()
     device = reranker.device
@@ -37,6 +39,7 @@ def get_topk_predictions(
     nn_candidates = []
     nn_labels = []
     nn_worlds = []
+    nn_scores = []
     stats = {}
 
     if is_zeshel:
@@ -46,6 +49,7 @@ def get_topk_predictions(
         world_size = 1
         candidate_pool = [candidate_pool]
         cand_encode_list = [cand_encode_list]
+        cand_cls_list=[cand_cls_list]
 
     logger.info("World size : %d" % world_size)
 
@@ -67,50 +71,92 @@ def get_topk_predictions(
             context_input, _, label_ids = batch
             src = 0
         cand_encode_list[src] = cand_encode_list[src].to(device)
+        cand_cls_list[src] = cand_cls_list[src].to(device)
+
         scores, embedding_ctxt = reranker.score_candidate(
             context_input, 
             None, 
-            cand_encs=cand_encode_list[src]
-        )
+            cand_encs=cand_encode_list[src],
+            cls_cands=cand_cls_list[src]
+        ) #scores: (batch_size, each_world_size)
         values, indicies = scores.topk(top_k)
         old_src = src
         for i in range(context_input.size(0)):
             oid += 1
             inds = indicies[i]
-
+            value = values[i]
             if srcs[i] != old_src:
                 src = srcs[i].item()
                 # not the same domain, need to re-do
-                new_scores, embedding_ctxt = reranker.score_candidate(
+                new_scores, _ = reranker.score_candidate(
                     context_input[[i]], 
                     None,
-                    cand_encs=cand_encode_list[src].to(device)
+                    cand_encs=cand_encode_list[src].to(device),
+                    cls_cands=cand_cls_list[src].to(device)
                 )
-                _, inds = new_scores.topk(top_k)
+                value, inds = new_scores.topk(top_k)
                 inds = inds[0]
-
+                value = values[0]
             pointer = -1
             for j in range(top_k):
                 if inds[j].item() == label_ids[i].item():
                     pointer = j
                     break
             stats[src].add(pointer)
+# Speical tokens
+            # if params["mode"] != "train":
+            #     if pointer == -1:
+            #         pointer = j + 1
+            #         cand_encode_list[srcs[i].item()]=cand_encode_list[srcs[i].item()].to(device)
+            #         cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
+            #         cur_candidates=torch.cat((cur_candidates,cand_encode_list[srcs[i].item()][label_ids[i]]), dim=0) #(65,1024)
+            #         if params["architecture"] == "raw_context_text":
+            #             nn_context.append(context_input[i].cpu().tolist())#(1024)
+            #         else:
+            #             nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
+
+            #     else:
+            #         cand_encode_list[srcs[i].item()]=cand_encode_list[srcs[i].item()].to(device)
+            #         cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
+            #         if params["architecture"] == "raw_context_text":
+            #             nn_context.append(context_input[i].cpu().tolist())#(1024)
+            #         else:
+            #             nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
+            #         if params["bert_model"]=="bert-large-uncased":
+            #             cur_candidates=torch.cat((cur_candidates,torch.rand((1, 1024), device=device)), dim=0) #(65,1024)
+            #         elif params["bert_model"]=="bert-base-cased":
+            #             cur_candidates=torch.cat((cur_candidates,torch.rand((1, 768), device=device)), dim=0) #(65,1024)
+                
+            #     # nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
 
             if pointer == -1:
-                # pointer = j + 1
-
                 continue
+            cand_encode_list[srcs[i].item()] = cand_encode_list[srcs[i].item()].to(device)
+            cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
+            if params["architecture"] == "raw_context_text":
+                nn_context.append(context_input[i].cpu().tolist())#(1024)
+            else:
+                nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
+            nn_scores.append(value.tolist())
+            nn_candidates.append(cur_candidates.cpu().tolist())
+            nn_labels.append(pointer)
+            nn_worlds.append(src)
+            # if pointer == -1:
+            #     # pointer = j + 1
+
+            #     continue
 
             if not save_predictions:
                 continue
 
-            # add examples in new_data
-            cand_encode_list[srcs[i].item()]=cand_encode_list[srcs[i].item()].to(device)
-            cur_candidates = cand_encode_list[srcs[i].item()][inds]
-            nn_context.append(embedding_ctxt[i].cpu().tolist())
-            nn_candidates.append(cur_candidates.cpu().tolist())
-            nn_labels.append(pointer)
-            nn_worlds.append(src)
+            # # add examples in new_data
+            # cand_encode_list[srcs[i].item()]=cand_encode_list[srcs[i].item()].to(device)
+            # cur_candidates = cand_encode_list[srcs[i].item()][inds]
+            # nn_context.append(embedding_ctxt[i].cpu().tolist())
+            # nn_candidates.append(cur_candidates.cpu().tolist())
+            # nn_labels.append(pointer)
+            # nn_worlds.append(src)
+
     res = Stats(top_k)
     for src in range(world_size):
         if stats[src].cnt == 0:
@@ -126,12 +172,19 @@ def get_topk_predictions(
     nn_context = torch.FloatTensor(nn_context)
     nn_candidates = torch.FloatTensor(nn_candidates)
     nn_labels = torch.LongTensor(nn_labels)
+    nn_scores = torch.FloatTensor(nn_scores)
+
     nn_data = {
         'context_vecs': nn_context,
         'candidate_vecs': nn_candidates,
         'labels': nn_labels,
+        'nn_scores': nn_scores
     }
-
+    print("context shape", nn_context.shape)
+    print("candidate shape", nn_candidates.shape)
+    print("score shape", nn_scores.shape)
+    
+    print("labels", nn_labels.shape)
     if is_zeshel:
         nn_data["worlds"] = torch.LongTensor(nn_worlds)
     

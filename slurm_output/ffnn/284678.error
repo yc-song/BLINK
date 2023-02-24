@@ -1,0 +1,30 @@
+wandb: Currently logged in as: jongsong. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.13.10
+wandb: Run data is saved locally in /home/jongsong/BLINK/wandb/run-20230223_012225-pkfmld1t
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run trim-frog-20
+wandb: ⭐️ View project at https://wandb.ai/jongsong/BLINK-blink_crossencoder
+wandb: 🚀 View run at https://wandb.ai/jongsong/BLINK-blink_crossencoder/runs/pkfmld1t
+wandb: Waiting for W&B process to finish... (failed 1). Press Control-C to abort syncing.
+wandb: - 0.014 MB of 0.014 MB uploaded (0.000 MB deduped)wandb: \ 0.014 MB of 0.014 MB uploaded (0.000 MB deduped)wandb: | 0.014 MB of 0.014 MB uploaded (0.000 MB deduped)wandb: / 0.014 MB of 0.014 MB uploaded (0.000 MB deduped)wandb: - 0.014 MB of 0.014 MB uploaded (0.000 MB deduped)wandb: \ 0.014 MB of 0.014 MB uploaded (0.000 MB deduped)wandb: | 0.014 MB of 0.014 MB uploaded (0.000 MB deduped)wandb: / 0.014 MB of 0.014 MB uploaded (0.000 MB deduped)wandb: - 0.014 MB of 0.014 MB uploaded (0.000 MB deduped)wandb: \ 0.014 MB of 0.014 MB uploaded (0.000 MB deduped)wandb: 
+wandb: Run history:
+wandb:    acc/train_bi-encoder_accuracy ▁
+wandb:         mrr/train_bi-encoder_mrr ▁
+wandb: recall/train_bi-encoder_recall@4 ▁
+wandb: 
+wandb: Run summary:
+wandb:    acc/train_bi-encoder_accuracy 0.39831
+wandb:         mrr/train_bi-encoder_mrr 0.54342
+wandb: recall/train_bi-encoder_recall@4 0.68883
+wandb: 
+wandb: 🚀 View run trim-frog-20 at: https://wandb.ai/jongsong/BLINK-blink_crossencoder/runs/pkfmld1t
+wandb: Synced 6 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20230223_012225-pkfmld1t/logs
+Traceback (most recent call last):
+  File "/home/jongsong/BLINK/blink/crossencoder/train_cross.py", line 927, in <module>
+    main(params)
+  File "/home/jongsong/BLINK/blink/crossencoder/train_cross.py", line 372, in main
+    train_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score)
+  File "/home/jongsong/anaconda3/envs/blink/lib/python3.7/site-packages/torch/utils/data/dataset.py", line 189, in __init__
+    assert all(tensors[0].size(0) == tensor.size(0) for tensor in tensors), "Size mismatch between tensors"
+AssertionError: Size mismatch between tensors

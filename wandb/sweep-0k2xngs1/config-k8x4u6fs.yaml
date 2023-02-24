@@ -1,0 +1,12 @@
+wandb_version: 1
+
+decoder:
+  value: true
+dim_red:
+  value: 768
+layers:
+  value: 4
+learning_rate:
+  value: 0.0023735961522331553
+train_batch_size:
+  value: 256
