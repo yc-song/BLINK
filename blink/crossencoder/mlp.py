@@ -14,7 +14,6 @@ from blink.common.ranker_base import get_model_obj
 from pytorch_transformers.tokenization_bert import BertTokenizer
 from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from blink.common.params import BlinkParser
-from torchsummary import summary
 
 def load_mlp(params):
     # Init model

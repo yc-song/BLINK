@@ -116,7 +116,7 @@ def main(params):
     logger = utils.get_logger(params["output_path"])
 
     # Init model
-        reranker = BiEncoderRanker(params)
+    reranker = BiEncoderRanker(params)
     tokenizer = reranker.tokenizer
     model = reranker.model
 

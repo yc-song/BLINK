@@ -13,7 +13,7 @@ import sys
 import datetime
 import json
 
-with open('/home/jongsong/BLINK/blink/common/crossencoder_config_ffnn.json') as f:
+with open('./blink/common/crossencoder_config.json') as f:
     config = json.load(f)
     print(config)
 

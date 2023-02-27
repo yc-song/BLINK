@@ -22,7 +22,6 @@ def get_topk_predictions(
     silent,
     logger,
     cand_cls_list,
-    cand_cls_list,
     top_k=10,
     is_zeshel=False,
     save_predictions=False,
