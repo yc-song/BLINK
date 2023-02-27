@@ -1,38 +1,60 @@
 ## Example to train BLINK on Zero-shot Entity Linking dataset
 
-Download dataset:
-
-    ./examples/zeshel/get_zeshel_data.sh
+### Conda environment setup. 
+To run the code, create a new conda environment by running the following command:
+```bash
+conda create -n blink -y python=3.7 && conda activate blink
+pip install -r requirements.txt
+```
  
-Convert data to BLINK format:
+### Download dataset
+Download the Zero-shot Entity Linking dataset by running the following command:
+```bash
+./examples/zeshel/get_zeshel_data.sh
+```
+ 
+### Converting data to BLINK format
+To convert the downloaded data into BLINK format, run:
+```bash
+python examples/zeshel/create_BLINK_zeshel_data.py
+```
 
-    python examples/zeshel/create_BLINK_zeshel_data.py
+NOTE: If you add '--debug' to the following commands, the debug mode is activated and test the code for the limited number (200) of datasets.
 
-Train Biencoder model. Note: the following command requires to run on 8 GPUs with 32G memory. Reduce the train_batch_size and eval_batch_size for less GPUs/memory resources.
+### Training Biencoder model.
+To train the biencoder model, run: 
+```bash
+python blink/biencoder/train_biencoder.py --optimizer AdamW --data_path data/zeshel/blink_format --output_path models/zeshel/biencoder --learning_rate 1e-05 --num_train_epochs 5 --max_context_length 128 --max_cand_length 128 --train_batch_size 128 --eval_batch_size 64 --bert_model bert-base-cased --type_optimization all_encoder_layers --data_parallel True
+```
+Please change the batch size accordingly to your computing resources.
 
-    python blink/biencoder/train_biencoder.py \
-      --data_path data/zeshel/blink_format \
-      --output_path models/zeshel/biencoder \  
-      --learning_rate 1e-05 --num_train_epochs 5 --max_context_length 128 --max_cand_length 128 \
-      --train_batch_size 128 --eval_batch_size 64 --bert_model bert-large-uncased \
-      --type_optimization all_encoder_layers --data_parallel
+### Getting top-k predictions from Biencoder model
+To get top-k predictions from the biencoder model on each dataset (train/valid/test), run:
+```bash
+python blink/biencoder/eval_biencoder.py --path_to_model models/zeshel/biencoder/pytorch_model.bin --data_path data/zeshel/blink_format --output_path models/zeshel --encode_batch_size 256 --eval_batch_size 32 --top_k 64 --bert_model bert-base-cased --mode train,valid,test --zeshel True --data_parallel True --architecture special_tokens --cand_encode_path data/zeshel/cand_enc --cand_pool_path data/zeshel/cand_pool --save_topk_result 
+```
+The context ([mention_start embedding) and top_k candidates ([entity] embeddings) are stored in the output_path with scores and labels.
 
-Get top-64 predictions from Biencoder model on train, valid and test dataset:
+### Training and Evaluating Crossencoder Model
+To train and evaluate the crossencoder model, follow the below steps:
 
-    python blink/biencoder/eval_biencoder.py \
-      --path_to_model models/zeshel/biencoder/pytorch_model.bin \
-      --data_path data/zeshel/blink_format \
-      --output_path models/zeshel \
-      --encode_batch_size 8 --eval_batch_size 1 --top_k 64 --save_topk_result \
-      --bert_model bert-large-uncased --mode train,valid,test \
-      --zeshel True --data_parallel
+1. Login to wandb to track the experiment.
+2. For Feed forward network architecture (Approach 1), run:
+```bash
+python blink/crossencoder/train_cross.py --act_fn=softplus --architecture=mlp --decoder=False --dim_red=512 --layers=6 --learning_rate=0.001 --train_batch_size=256
+```
+3. For BERT whose inputs are [Mention_start] and [ENT] token embedding from bi-encoder (Approach 2), run:
+```bash
+python blink/crossencoder/train_cross.py --wandb <your project name> --architecture special_token --learning_rate 2e-05 --num_train_epochs 100 --train_batch_size 256 --eval_batch_size 1024 --wandb "BERT with Speical Tokens" --save True --add_linear True
+```
+For crossencoder whose inputs are "raw context text"+"[ENT] embedding" (Approach 3), the retriever should save raw context text instead of [mention_start] embedding. Thus, you should run bi-encoder with different arguments.
 
-Train and eval crossencoder model:
-
-    python blink/crossencoder/train_cross.py \
-      --data_path  models/zeshel/top64_candidates/ \
-      --output_path models/zeshel/crossencoder \
-      --learning_rate 2e-05 --num_train_epochs 5 --max_context_length 128 --max_cand_length 128 \
-      --train_batch_size 2 --eval_batch_size 2 --bert_model bert-large-uncased \
-      --type_optimization all_encoder_layers --add_linear --data_parallel \
-      --zeshel True
+1. Running bi-encoder and get candidates:
+```bash
+python blink/biencoder/eval_biencoder.py --path_to_model models/zeshel/biencoder/pytorch_model.bin --data_path data/zeshel/blink_format --output_path models/zeshel_base_special_tokens --encode_batch_size 128 --eval_batch_size 128 --top_k 64 --save_topk_result --bert_model bert-base-cased --mode train,valid,test --zeshel True --data_parallel True --architecture raw_context_text --cand_encode_path data/zeshel/cand_enc --cand_pool_path data/zeshel/cand_pool
+```
+check out context shape has changed to max_context_length (deafault: 128) from the hidden layer dimension of BERT (BERT-base: 768 & BERT-large: 1024)
+2. Train and evaluate cross-encoder
+```bash
+blink/crossencoder/train_cross.py --wandb <your project name> --architecture raw_context_text --learning_rate 2e-05 --num_train_epochs 20 --train_batch_size 8 --eval_batch_size 128 --save True --add_linear True
+```
