@@ -73,9 +73,6 @@ def get_topk_predictions(
             src = 0
         cand_encode_list[src] = cand_encode_list[src].to(device)
         cand_cls_list[src] = cand_cls_list[src].to(device)
-
-        cand_cls_list[src] = cand_cls_list[src].to(device)
-
         scores, embedding_ctxt = reranker.score_candidate(
             context_input, 
             None, 
@@ -135,11 +132,18 @@ def get_topk_predictions(
             if pointer == -1:
                 continue
             cand_encode_list[srcs[i].item()] = cand_encode_list[srcs[i].item()].to(device)
-            cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
-            if params["architecture"] == "raw_context_text":
+
+
+            if params["architecture"] == "baseline":
+                candidate_pool[srcs[i].item()] = candidate_pool[srcs[i].item()].to(device)
+                cur_candidates = candidate_pool[srcs[i].item()][inds]
+            else:
+                cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
+            if params["architecture"] == "raw_context_text" or params["architecture"] == "baseline":
                 nn_context.append(context_input[i].cpu().tolist())#(1024)
             else:
                 nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
+
             nn_scores.append(value.tolist())
             nn_candidates.append(cur_candidates.cpu().tolist())
             nn_labels.append(pointer)

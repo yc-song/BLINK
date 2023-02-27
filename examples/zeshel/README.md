@@ -41,7 +41,7 @@ To train and evaluate the crossencoder model, follow the below steps:
 1. Login to wandb to track the experiment.
 2. For Feed forward network architecture (Approach 1), run:
 ```bash
-python blink/crossencoder/train_cross.py --act_fn=softplus --architecture=mlp --decoder=False --dim_red=512 --layers=6 --learning_rate=0.001 --train_batch_size=256
+python blink/crossencoder/train_cross.py --wandb <your project name>  --act_fn=softplus --architecture=mlp --decoder=False --dim_red=512 --layers=6 --learning_rate=0.001 --train_batch_size=256
 ```
 3. For BERT whose inputs are [Mention_start] and [ENT] token embedding from bi-encoder (Approach 2), run:
 ```bash
@@ -51,7 +51,7 @@ For crossencoder whose inputs are "raw context text"+"[ENT] embedding" (Approach
 
 1. Running bi-encoder and get candidates:
 ```bash
-python blink/biencoder/eval_biencoder.py --path_to_model models/zeshel/biencoder/pytorch_model.bin --data_path data/zeshel/blink_format --output_path models/zeshel_base_special_tokens --encode_batch_size 128 --eval_batch_size 128 --top_k 64 --save_topk_result --bert_model bert-base-cased --mode train,valid,test --zeshel True --data_parallel True --architecture raw_context_text --cand_encode_path data/zeshel/cand_enc --cand_pool_path data/zeshel/cand_pool
+python blink/biencoder/eval_biencoder.py --path_to_model models/zeshel/biencoder/pytorch_model.bin --data_path data/zeshel/blink_format --output_path models/zeshel --encode_batch_size 128 --eval_batch_size 128 --top_k 64 --save_topk_result --bert_model bert-base-cased --mode train,valid,test --zeshel True --data_parallel True --architecture raw_context_text --cand_encode_path data/zeshel/cand_enc --cand_pool_path data/zeshel/cand_pool
 ```
 check out context shape has changed to max_context_length (deafault: 128) from the hidden layer dimension of BERT (BERT-base: 768 & BERT-large: 1024)
 2. Train and evaluate cross-encoder

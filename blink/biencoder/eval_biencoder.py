@@ -183,8 +183,8 @@ def load_or_generate_candidate_pool(
         # try to load candidate pool from file
         try:
             logger.info("Loading pre-generated candidate pool from: ")
-            logger.info(cand_pool_path+"/cand_pool_"+params["mode"]+"_"+params["architecture"]+".pt")
-            candidate_pool = torch.load(cand_pool_path+"/cand_pool_"+params["mode"]+"_"+params["architecture"]+".pt")
+            logger.info(cand_pool_path+"/cand_pool_"+params["mode"]+".pt")
+            candidate_pool = torch.load(cand_pool_path+"/cand_pool_"+params["mode"]+".pt")
         except:
             logger.info("Loading failed. Generating candidate pool")
 
@@ -202,7 +202,7 @@ def load_or_generate_candidate_pool(
         if cand_pool_path is not None:
             logger.info("Saving candidate pool.")
             os.makedirs(cand_pool_path, exist_ok = True)
-            torch.save(candidate_pool, cand_pool_path+"/cand_pool_"+params["mode"]+"_"+params["architecture"]+".pt")
+            torch.save(candidate_pool, cand_pool_path+"/cand_pool_"+params["mode"]+".pt")
 
     return candidate_pool
 
@@ -240,8 +240,8 @@ def main(params):
         # if success, avoid computing candidate encoding
         try:
             logger.info("Loading pre-generated candidate encode path.")
-            candidate_encoding = torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+"_"+params["architecture"]+".pt")
-            candidate_cls=torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+"_"+params["architecture"]+"_cls.pt")
+            candidate_encoding = torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+".pt")
+            candidate_cls=torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+"_cls.pt")
         except:
             logger.info("Loading failed. Generating candidate encoding.")
 
@@ -262,8 +262,8 @@ def main(params):
             
             logger.info("Saving candidate encoding to file " + cand_encode_path)
             os.makedirs(cand_encode_path, exist_ok = True)
-            torch.save(candidate_encoding, cand_encode_path+"/cand_enc_"+params["mode"]+"_"+params["architecture"]+".pt")
-            torch.save(candidate_cls, cand_encode_path+"/cand_enc_"+params["mode"]+"_"+params["architecture"]+"_cls.pt")
+            torch.save(candidate_encoding, cand_encode_path+"/cand_enc_"+params["mode"]+".pt")
+            torch.save(candidate_cls, cand_encode_path+"/cand_enc_"+params["mode"]+"_cls.pt")
 
 
     test_samples = utils.read_dataset(params["mode"], params["data_path"])
