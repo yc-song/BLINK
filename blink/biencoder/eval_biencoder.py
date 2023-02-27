@@ -12,7 +12,7 @@ import os
 import torch
 from tqdm import tqdm
 import sys
-sys.path.append('/home/jongsong/BLINK')
+sys.path.append('.')
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 
 from pytorch_transformers.tokenization_bert import BertTokenizer
@@ -183,8 +183,8 @@ def load_or_generate_candidate_pool(
         # try to load candidate pool from file
         try:
             logger.info("Loading pre-generated candidate pool from: ")
-            logger.info(cand_pool_path)
-            candidate_pool = torch.load(cand_pool_path)
+            logger.info(cand_pool_path+"/cand_pool_"+params["mode"]+"_"+params["architecture"]+".pt")
+            candidate_pool = torch.load(cand_pool_path+"/cand_pool_"+params["mode"]+"_"+params["architecture"]+".pt")
         except:
             logger.info("Loading failed. Generating candidate pool")
 
@@ -201,7 +201,8 @@ def load_or_generate_candidate_pool(
 
         if cand_pool_path is not None:
             logger.info("Saving candidate pool.")
-            torch.save(candidate_pool, cand_pool_path)
+            os.makedirs(cand_pool_path, exist_ok = True)
+            torch.save(candidate_pool, cand_pool_path+"/cand_pool_"+params["mode"]+"_"+params["architecture"]+".pt")
 
     return candidate_pool
 
@@ -239,8 +240,8 @@ def main(params):
         # if success, avoid computing candidate encoding
         try:
             logger.info("Loading pre-generated candidate encode path.")
-            candidate_encoding = torch.load(cand_encode_path)
-            candidate_cls=torch.load(cand_cls_path)
+            candidate_encoding = torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+"_"+params["architecture"]+".pt")
+            candidate_cls=torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+"_"+params["architecture"]+"_cls.pt")
         except:
             logger.info("Loading failed. Generating candidate encoding.")
 
@@ -257,9 +258,12 @@ def main(params):
 
         if cand_encode_path is not None:
                 # Save candidate encoding to avoid re-compute
-                logger.info("Saving candidate encoding to file " + cand_encode_path)
-                torch.save(candidate_encoding, cand_encode_path)
-                torch.save(candidate_cls, cand_cls_path)
+
+            
+            logger.info("Saving candidate encoding to file " + cand_encode_path)
+            os.makedirs(cand_encode_path, exist_ok = True)
+            torch.save(candidate_encoding, cand_encode_path+"/cand_enc_"+params["mode"]+"_"+params["architecture"]+".pt")
+            torch.save(candidate_cls, cand_encode_path+"/cand_enc_"+params["mode"]+"_"+params["architecture"]+"_cls.pt")
 
 
     test_samples = utils.read_dataset(params["mode"], params["data_path"])
@@ -306,7 +310,10 @@ def main(params):
             )
             if not os.path.exists(save_data_dir):
                 os.makedirs(save_data_dir)
-            save_data_path = os.path.join(save_data_dir, "{}{}.t7".format(params["mode"], i))
+            if params["split"] == 1:
+                save_data_path = os.path.join(save_data_dir, "{}_{}.t7".format(params["mode"], params["architecture"]))
+            else:
+                save_data_path = os.path.join(save_data_dir, "{}_{}_{}.t7".format(params["mode"], params["architecture"], i))
             torch.save(new_data, save_data_path)
 
         

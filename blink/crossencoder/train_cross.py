@@ -223,7 +223,6 @@ def main(params):
     previous_step = 0
     # Init model
     if params["architecture"]=="mlp":
-    if params["architecture"]=="mlp":
         reranker= MlpModel(params)
     else:
         reranker = CrossEncoderRanker(params)
@@ -252,7 +251,7 @@ def main(params):
         print("model architecture", model.layers)
     # if you want to resume the training, set "resume" true and specify "run_id"
     if params["resume"]==True:
-        folder_path="models/zeshel/crossencoder/{}/".format(params["run_id"])
+        folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"], params["run_id"])
 
         each_file_path_and_gen_time = []
         ## Getting newest file
@@ -274,7 +273,7 @@ def main(params):
     else:
         run = wandb.init(project=params["wandb"], config=parser)
     config = wandb.config
-    model_output_path = params["output_path"]+run.id
+    model_output_path = params["output_path"]+params["architecture"]+"/"+run.id
     if not params["resume"]:
         if not os.path.exists(model_output_path+"training_params"):
             os.makedirs(model_output_path+"/training_params")
@@ -313,16 +312,25 @@ def main(params):
 
     max_seq_length = params["max_seq_length"]
     context_length = params["max_context_length"]
-    train_split = 5
+    train_split = params["train_split"]
     for i in range(train_split):
-        if params["architecture"] == "raw_context_text":
-            fname = os.path.join(params["data_path"], "train_raw_wo64.t7")
+        
+        if train_split == 1:
+            fname = os.path.join(params["data_path"], "train_{}.t7".format(params["architecture"]))
         else:
-            if params["without_64"]==False:
-                fname = os.path.join(params["data_path"], "train{}.t7".format(i))
-            else:
-                fname = os.path.join(params["data_path"], "train{}.t7".format(i))
-
+            fname = os.path.join(params["data_path"], "train_{}_{}.t7".format(params["architecture"], i))
+        if not os.path.isfile(fname):
+            if params["architecture"] == "mlp":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "train_{}.t7".format("special_tokens"))
+                else:
+                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("special_tokens", i))
+            elif params["architecture"] == "special_tokens":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp"))
+                else:
+                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp", i))
+        print(fname)
         if i == 0:
             # fname2 = os.path.join(params["data_path"], "train2.t7")
             train_data = torch.load(fname)
@@ -384,16 +392,23 @@ def main(params):
 
     if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
         scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
-    valid_split = 2
+    valid_split = params["valid_split"]
     for i in range(valid_split):
-        ## valid dataset preprocessing
-        if params["architecture"] == "raw_context_text":
-            fname = os.path.join(params["data_path"], "valid_raw_wo64.t7")
+        if valid_split == 1:
+            fname = os.path.join(params["data_path"], "valid_{}.t7".format(params["architecture"]))
         else:
-            if params["without_64"]==False:
-                fname = os.path.join(params["data_path"], "valid{}.t7".format(i))
-            else:
-                fname = os.path.join(params["data_path"], "valid_wo64.t7")
+            fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format(params["architecture"], i))
+        if not os.path.isfile(fname):
+            if params["architecture"] == "mlp":
+                if valid_split == 1:
+                    fname = os.path.join(params["data_path"], "valid_{}.t7".format("special_tokens"))
+                else:
+                    fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("special_tokens", i))
+            elif params["architecture"] == "special_tokens":
+                if valid_split == 1:
+                    fname = os.path.join(params["data_path"], "valid_{}.t7".format("mlp"))
+                else:
+                    fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("mlp", i))
 
         if i == 0:
             valid_data = torch.load(fname)
@@ -414,7 +429,6 @@ def main(params):
             # print("candidate:", candidate_input)
             label_input = torch.cat((label_input, valid_data["labels"][:params["train_size"]]), dim = 0)
             bi_encoder_score = torch.cat((bi_encoder_score, valid_data["nn_scores"][:params["train_size"]]), dim = 0)
-        print(context_input.shape)
     bi_val_mrr=torch.mean(1/(label_input+1)).item()
     bi_val_accuracy = torch.mean((label_input == 0).float()).item()
     bi_val_recall_4 = torch.mean((label_input <= 3).float()).item()
@@ -830,12 +844,23 @@ def main(params):
 
 
     ## Evaluation on test set
-    test_split = 2
+    test_split = params["test_split"]
     for i in range(test_split):
-        if params["architecture"] == "raw_context_text":
-            fname = os.path.join(params["data_path"], "test_raw_wo64.t7")
+        if test_split == 1:
+            fname = os.path.join(params["data_path"], "test_{}.t7".format(params["architecture"]))
         else:
-            fname = os.path.join(params["data_path"], "test{}.t7".format(i))
+            fname = os.path.join(params["data_path"], "test_{}_{}.t7".format(params["architecture"], i))
+        if not os.path.isfile(fname):
+            if params["architecture"] == "mlp":
+                if valid_split == 1:
+                    fname = os.path.join(params["data_path"], "test_{}.t7".format("special_tokens"))
+                else:
+                    fname = os.path.join(params["data_path"], "test_{}_{}.t7".format("special_tokens", i))
+            elif params["architecture"] == "special_tokens":
+                if valid_split == 1:
+                    fname = os.path.join(params["data_path"], "test_{}.t7".format("mlp"))
+                else:
+                    fname = os.path.join(params["data_path"], "test_{}_{}.t7".format("mlp", i))
         if i == 0:
             test_data = torch.load(fname)
             context_input = test_data["context_vecs"]
@@ -905,7 +930,7 @@ def main(params):
     #     )
     #     torch.save(model.state_dict(), epoch_output_folder_path)
     ## Remove every file but the newest file
-    folder_path="models/zeshel/crossencoder/{}/".format(run.id)
+    folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"], run.id)
     each_file_path_and_gen_time = []
 
     for each_file_name in os.listdir(folder_path):

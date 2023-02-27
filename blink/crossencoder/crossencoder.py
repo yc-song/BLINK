@@ -33,9 +33,7 @@ from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from blink.common.ranker_base_cross import BertEncoder, get_model_obj
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import ENT_START_TAG, ENT_END_TAG, ENT_TITLE_TAG
-from torchsummaryX import summary
 
-import pytorch_model_summary as pms
 def load_crossencoder(params):
     # Init model
     crossencoder = CrossEncoderRanker(params)

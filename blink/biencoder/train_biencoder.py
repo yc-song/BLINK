@@ -15,7 +15,7 @@ import random
 import time
 import numpy as np
 import sys
-sys.path.append('/home/jongsong/BLINK')
+sys.path.append('.')
 from multiprocessing.pool import ThreadPool
 
 from tqdm import tqdm, trange
