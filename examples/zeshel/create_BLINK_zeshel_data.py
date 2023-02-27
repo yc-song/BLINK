@@ -158,7 +158,7 @@ if __name__ == '__main__':
     )
     params = parser.parse_args()
     os.makedirs(params.output_path, exist_ok=True)
-
+    
     entity_dict, entity_map = load_entity_dict(params)
     convert_data(params, entity_dict, entity_map, 'train')
     convert_data(params, entity_dict, entity_map, 'valid')

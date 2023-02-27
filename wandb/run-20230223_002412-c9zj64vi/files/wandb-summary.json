@@ -1,1 +1,0 @@
-{"mrr/train_bi-encoder_mrr": 0.5444108843803406, "acc/train_bi-encoder_accuracy": 0.40098801255226135, "recall/train_bi-encoder_recall@4": 0.6891948580741882, "_timestamp": 1677079461.2423608, "_runtime": 9.131475925445557, "_step": 0, "_wandb": {"runtime": 9}}

@@ -10,7 +10,6 @@ import pickle
 import torch
 import json
 import sys
-sys.path.append('.')
 import io
 import random
 import time

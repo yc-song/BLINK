@@ -14,17 +14,16 @@ from blink.common.ranker_base import get_model_obj
 from pytorch_transformers.tokenization_bert import BertTokenizer
 from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from blink.common.params import BlinkParser
-from torchsummary import summary
 
 def load_mlp(params):
     # Init model
     crossencoder = MlpModel(params)
     return crossencoder
-k=256
+
 input_size=768*2 #(64,256)
 ## model이랑 module, ranker 나눠서 modeule이랑 ranker에서 model 호출
 class MlpModel(nn.Module):
-    def __init__(self,params, top_k=k, model_input=input):
+    def __init__(self,params, model_input=input):
         super(MlpModel, self).__init__()
         self.params=params
         self.device=torch.device(
@@ -36,7 +35,7 @@ class MlpModel(nn.Module):
                 "bert-base-cased"
             )
         self.build_model()
-        self.top_k = top_k
+        self.top_k = params["top_k"]
         self.model = self.model.to(self.device)
         # self.model = torch.nn.DataParallel(self.model)
     def build_model(self):
@@ -117,7 +116,7 @@ class MlpModel(nn.Module):
         torch.set_printoptions(threshold=10_000)
         return loss, scores
 class MlpModule(nn.Module):
-    def __init__(self,params, top_k=k, model_input=input_size):
+    def __init__(self,params, model_input=input_size):
         super(MlpModule, self).__init__()
         self.params=params
         self.input_size=model_input 

@@ -9,7 +9,6 @@ import random
 import time
 import numpy as np
 import sys
-sys.path.append('.')
 from multiprocessing.pool import ThreadPool
 from torch import optim
 from tqdm import tqdm, trange

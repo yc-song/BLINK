@@ -13,7 +13,7 @@ import sys
 import datetime
 import json
 
-with open('/home/jongsong/BLINK/blink/common/crossencoder_config_ffnn.json') as f:
+with open('./blink/common/crossencoder_config.json') as f:
     config = json.load(f)
     print(config)
 
@@ -242,6 +242,25 @@ class BlinkParser(argparse.ArgumentParser):
             type=int,
             help="split dataset into N chunks. (because of out of memory)",
         )
+        parser.add_argument(
+            "--train_split",
+            default=config["train_split"],
+            type=int,
+            help="N when train dataset splitted into N chunks. (because of out of memory)",
+        )
+        parser.add_argument(
+            "--valid_split",
+            default=config["valid_split"],
+            type=int,
+            help="N when valid dataset splitted into N chunks. (because of out of memory)",
+        )
+        parser.add_argument(
+            "--test_split",
+            default=config["test_split"],
+            type=int,
+            help="N when test dataset splitted into N chunks. (because of out of memory)",
+        )
+
         
 
 

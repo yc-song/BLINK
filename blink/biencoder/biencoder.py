@@ -22,7 +22,6 @@ from pytorch_transformers.tokenization_bert import BertTokenizer
 from blink.common.ranker_base import BertEncoder, get_model_obj
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import ENT_START_TAG, ENT_END_TAG, ENT_TITLE_TAG
-from blink.crossencoder.mlp import MlpModule
 def load_biencoder(params):
     # Init model
     biencoder = BiEncoderRanker(params)
@@ -107,9 +106,6 @@ class BiEncoderRanker(torch.nn.Module):
         self.data_parallel = params.get("data_parallel")
         if self.data_parallel:
             self.model = torch.nn.DataParallel(self.model)
-        if self.params["with_mlp"]:
-            self.mlp_model = MlpModule(params)
-            self.mlp_model.to(self.device)  
 
     def load_model(self, fname, cpu=False):
         if cpu:
@@ -192,25 +188,20 @@ class BiEncoderRanker(torch.nn.Module):
             None, None, None, token_idx_cands, segment_idx_cands, mask_cands
         )
 
-        if self.params["with_mlp"]:
-            embedding_ctxt = embedding_ctxt.unsqueeze(dim=1).expand(-1,embedding_ctxt.size(0),-1)
-            input=torch.stack((embedding_ctxt,embedding_cands),dim=2)
-            print(input.shape)
-            print(embedding_cands.shape)
-            input = torch.cat((embedding_ctxt.unsqueeze(dim = 1).unsqueeze(dim = 2), embedding_cands.unsqueeze(dim = 1).unsqueeze(dim = 2)), dim = 2)
-            scores = self.mlp_model(input)
-            print(scores.shape)
+        # if self.params["with_mlp"]:
+        #     embedding_ctxt = embedding_ctxt.unsqueeze(dim=1).expand(-1,embedding_ctxt.size(0),-1)
+        #     input=torch.stack((embedding_ctxt,embedding_cands),dim=2)
+        #     input = torch.cat((embedding_ctxt.unsqueeze(dim = 1).unsqueeze(dim = 2), embedding_cands.unsqueeze(dim = 1).unsqueeze(dim = 2)), dim = 2)
+        #     scores = self.mlp_model(input)
+        if random_negs:
+            # train on random negatives
+            scores=cls_ctxt.mm(cls_cands.t())
         else:
-            if random_negs:
-                # train on random negatives
-                scores=cls_ctxt.mm(cls_cands.t())
-            else:
-                # train on hard negatives
-                embedding_ctxt = embedding_ctxt.unsqueeze(1)  # batchsize x 1 x embed_size
-                embedding_cands = embedding_cands.unsqueeze(2)  # batchsize x embed_size x 2
-                scores = torch.bmm(cls_ctxt, cls_cands)  # batchsize x 1 x 1
-                scores = torch.squeeze(scores)
-            print(scores.shape)
+            # train on hard negatives
+            embedding_ctxt = embedding_ctxt.unsqueeze(1)  # batchsize x 1 x embed_size
+            embedding_cands = embedding_cands.unsqueeze(2)  # batchsize x embed_size x 2
+            scores = torch.bmm(cls_ctxt, cls_cands)  # batchsize x 1 x 1
+            scores = torch.squeeze(scores)
         return scores, embedding_ctxt
 
     # label_input -- negatives provided
