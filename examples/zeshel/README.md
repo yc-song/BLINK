@@ -51,8 +51,9 @@ For crossencoder whose inputs are "raw context text"+"[ENT] embedding" (Approach
 
 1. Running bi-encoder and get candidates:
 ```bash
-python blink/biencoder/eval_biencoder.py --path_to_model /home/jongsong/BLINK/models/zeshel/biencoder_base/pytorch_model.bin --data_path data/zeshel/blink_format --output_path models/zeshel_base_special_tokens --encode_batch_size 128 --eval_batch_size 128 --top_k --save_topk_result --bert_model bert-base-cased --mode valid --zeshel True --data_parallel True --architecture raw_context_text --cand_encode_path data/zeshel/cand_enc --cand_pool_path data/zeshel/cand_pool_base/cand_pool
+python blink/biencoder/eval_biencoder.py --path_to_model models/zeshel/biencoder/pytorch_model.bin --data_path data/zeshel/blink_format --output_path models/zeshel_base_special_tokens --encode_batch_size 128 --eval_batch_size 128 --top_k 64 --save_topk_result --bert_model bert-base-cased --mode train,valid,test --zeshel True --data_parallel True --architecture raw_context_text --cand_encode_path data/zeshel/cand_enc --cand_pool_path data/zeshel/cand_pool
 ```
+check out context shape has changed to max_context_length (deafault: 128) from the hidden layer dimension of BERT (BERT-base: 768 & BERT-large: 1024)
 2. Train and evaluate cross-encoder
 ```bash
 blink/crossencoder/train_cross.py --wandb <your project name> --architecture raw_context_text --learning_rate 2e-05 --num_train_epochs 20 --train_batch_size 8 --eval_batch_size 128 --save True --add_linear True
