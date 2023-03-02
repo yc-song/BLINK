@@ -39,7 +39,14 @@ from blink.crossencoder.mlp import MlpModel
 import matplotlib.pyplot as plt
 logger = None
 
-def modify(context_input, candidate_input, params, mode = "train", wo64 = True):
+def modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = True):
+    device = torch.device('cuda')
+    # get values of candidates first
+    cand_list = []
+    for i in range(context_input.size(0)):
+        candidate_input[world[i].item()] = candidate_input[world[i].item()].to(device) 
+        cand_list.append(candidate_input[world[i].item()][idxs[i]].squeeze(dim = 0).tolist())
+    candidate_input = torch.FloatTensor(cand_list).to(device)
 
     top_k=params["top_k"]
     ## context_input shape: (Size ,1024) e.g.  (10000, 1024)
@@ -63,18 +70,17 @@ def modify(context_input, candidate_input, params, mode = "train", wo64 = True):
             # print(new_input.shape)
             return new_input
     else:  
-        context_input=context_input.unsqueeze(dim=1).expand(-1,top_k,-1)
-        if params["architecture"]=="mlp" or params["architecture"]=="special_token":
+        context_input=context_input.unsqueeze(dim=1).expand(-1,top_k,-1).to(device)
+        if params["architecture"]=="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert":
             new_input=torch.stack((context_input,candidate_input),dim=2) # shape: (Size, 65, 2, 1024) e.g. (10000, 65, 2 , 1024)
         elif params["architecture"]== "raw_context_text":
             new_input=torch.cat((context_input,candidate_input),dim=2)
-        # print(new_input.shape)
         # print(new_input.shape)
         return new_input
         
 
 
-def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=False, silent=True, train=True, input = None, wo64 = True):
+def evaluate(reranker, eval_dataloader, device, logger, context_length, candidate_input, zeshel=False, silent=True, train=True, input = None, wo64 = True):
     reranker.eval()
     if silent:
         iter_ = eval_dataloader
@@ -115,6 +121,10 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, zeshel=F
         batch = tuple(t.to(device) for t in batch)
         context_input = batch[0]
         label_input = batch[1]
+        if params["top_k"]>100:
+            world = batch[4]
+            idxs = batch[5]
+            context_input = modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = params["without_64"])
 
         with torch.no_grad():
             eval_loss, logits = reranker(context_input, label_input, context_length, evaluate = True)
@@ -221,15 +231,69 @@ def main(params):
     # wandb.init(project=params["wandb"], config=parser, resume="must", id=<original_sweeps_run_id>)
     epoch_idx_global = 0
     previous_step = 0
+        # Fix the random seeds
+    seed = params["seed"]
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    max_seq_length = params["max_seq_length"]
+    context_length = params["max_context_length"]
+    train_split = params["train_split"]
+    for i in range(train_split):
+        if train_split == 1:
+            fname = os.path.join(params["data_path"], "train_{}.t7".format(params["architecture"]))
+        else:
+            fname = os.path.join(params["data_path"], "train_{}_{}.t7".format(params["architecture"], i))
+        if not os.path.isfile(fname):
+            if params["architecture"] == "mlp":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "train_{}.t7".format("special_tokens"))
+                else:
+                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("special_tokens", i))
+            elif params["architecture"] == "special_tokens":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp"))
+                else:
+                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp", i))
+        if i == 0:
+            # fname2 = os.path.join(params["data_path"], "train2.t7")
+            # train_data = torch.load(fname)
+            train_data = torch.load(fname,  map_location=torch.device('cpu'))
+
+            context_input = train_data["context_vecs"][:params["train_size"]]
+            # print("context shape:", context_input.shape)
+            # print("train context", context_input.shape) 
+            candidate_input_train = train_data["candidate_vecs"]
+            world = train_data["worlds"][:params["train_size"]]
+            idxs = train_data["indexes"][:params["train_size"]]
+            # print("candidate shape:", candidate_input.shape)
+            # print("candidate:", candidate_input)
+            label_input = train_data["labels"][:params["train_size"]]
+            bi_encoder_score = train_data["nn_scores"][:params["train_size"]]
+        else:
+            # fname2 = os.path.join(params["data_path"], "train2.t7")
+            train_data = torch.load(fname)
+
+            context_input = torch.cat((context_input, train_data["context_vecs"][:params["train_size"]]), dim = 0)
+            # print("context shape:", context_input.shape)
+            # print("train context", context_input.shape) 
+            # print("candidate shape:", candidate_input.shape)
+            # print("candidate:", candidate_input)
+            world = torch.cat((world, train_data["worlds"][:params["train_size"]]), dim = 0)
+            idxs = torch.cat((idxs, train_data["indexes"][:params["train_size"]]), dim = 0)
+            label_input = torch.cat((label_input, train_data["labels"][:params["train_size"]]), dim = 0)
+            bi_encoder_score = torch.cat((bi_encoder_score, train_data["nn_scores"][:params["train_size"]]), dim = 0)
     # Init model
-    if params["architecture"]=="mlp":
+    if params["architecture"]=="mlp" or params["architecture"] == "mlp_with_bert":
         reranker= MlpModel(params)
     else:
         reranker = CrossEncoderRanker(params)
     tokenizer = reranker.tokenizer
     model = reranker.model
-
-    if params["architecture"] == "mlp":
+    if reranker.n_gpu > 0:
+        torch.cuda.manual_seed_all(seed)
+    if params["architecture"] == "mlp" or params["architecture"] == "mlp_with_bert":
         if params["optimizer"]=="Adam":
             optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
         elif params["optimizer"]=="AdamW":
@@ -252,7 +316,6 @@ def main(params):
     # if you want to resume the training, set "resume" true and specify "run_id"
     if params["resume"]==True:
         folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"], params["run_id"])
-
         each_file_path_and_gen_time = []
         ## Getting newest file
         for each_file_name in os.listdir(folder_path):
@@ -302,59 +365,7 @@ def main(params):
     eval_batch_size = params["eval_batch_size"]
     grad_acc_steps = params["gradient_accumulation_steps"]
 
-    # Fix the random seeds
-    seed = params["seed"]
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if reranker.n_gpu > 0:
-        torch.cuda.manual_seed_all(seed)
 
-    max_seq_length = params["max_seq_length"]
-    context_length = params["max_context_length"]
-    train_split = params["train_split"]
-    for i in range(train_split):
-        
-        if train_split == 1:
-            fname = os.path.join(params["data_path"], "train_{}.t7".format(params["architecture"]))
-        else:
-            fname = os.path.join(params["data_path"], "train_{}_{}.t7".format(params["architecture"], i))
-        if not os.path.isfile(fname):
-            if params["architecture"] == "mlp":
-                if train_split == 1:
-                    fname = os.path.join(params["data_path"], "train_{}.t7".format("special_tokens"))
-                else:
-                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("special_tokens", i))
-            elif params["architecture"] == "special_tokens":
-                if train_split == 1:
-                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp"))
-                else:
-                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp", i))
-        print(fname)
-        if i == 0:
-            # fname2 = os.path.join(params["data_path"], "train2.t7")
-            train_data = torch.load(fname)
-
-            context_input = train_data["context_vecs"][:params["train_size"]]
-            # print("context shape:", context_input.shape)
-            # print("train context", context_input.shape) 
-            candidate_input = train_data["candidate_vecs"][:params["train_size"]]
-            # print("candidate shape:", candidate_input.shape)
-            # print("candidate:", candidate_input)
-            label_input = train_data["labels"][:params["train_size"]]
-            bi_encoder_score = train_data["nn_scores"][:params["train_size"]]
-        else:
-            # fname2 = os.path.join(params["data_path"], "train2.t7")
-            train_data = torch.load(fname)
-
-            context_input = torch.cat((context_input, train_data["context_vecs"][:params["train_size"]]), dim = 0)
-            # print("context shape:", context_input.shape)
-            # print("train context", context_input.shape) 
-            candidate_input = torch.cat((candidate_input, train_data["candidate_vecs"][:params["train_size"]]), dim = 0)
-            # print("candidate shape:", candidate_input.shape)
-            # print("candidate:", candidate_input)
-            label_input = torch.cat((label_input, train_data["labels"][:params["train_size"]]), dim = 0)
-            bi_encoder_score = torch.cat((bi_encoder_score, train_data["nn_scores"][:params["train_size"]]), dim = 0)
     # print(label_input)
     bi_train_mrr=torch.mean(1/(label_input+1)).item()
     bi_train_accuracy = torch.mean((label_input == 0).float()).item()
@@ -375,13 +386,16 @@ def main(params):
         context_input = context_input[:max_n]
         candidate_input = candidate_input[:max_n]
         label_input = label_input[:max_n]
-
-    context_input = modify(context_input, candidate_input, params, mode = "train", wo64 = params["without_64"])
+    if params["top_k"]<100:
+        context_input = modify(context_input, candidate_input_train, params, world, idxs, mode = "train", wo64 = params["without_64"])
     if params["zeshel"]:
         src_input = train_data['worlds'][:params["train_size"]]
-        train_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score)
+        train_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, world, idxs)
+        
     else:
-        train_tensor_data = TensorDataset(context_input, label_input, bi_encoder_score)
+        train_tensor_data = TensorDataset(context_input, label_input, bi_encoder_score, world, idxs)
+
+
     train_sampler = RandomSampler(train_tensor_data)
 
     train_dataloader = DataLoader(
@@ -413,7 +427,9 @@ def main(params):
         if i == 0:
             valid_data = torch.load(fname)
             context_input = valid_data["context_vecs"][:params["valid_size"]]
-            candidate_input = valid_data["candidate_vecs"][:params["valid_size"]]
+            candidate_input_valid = valid_data["candidate_vecs"]
+            world = valid_data["worlds"][:params["valid_size"]]
+            idxs = valid_data["indexes"][:params["valid_size"]]
             label_input = valid_data["labels"][:params["valid_size"]]
             bi_encoder_score = valid_data["nn_scores"][:params["valid_size"]]
 
@@ -421,14 +437,15 @@ def main(params):
             # fname2 = os.path.join(params["data_path"], "train2.t7")
             valid_data = torch.load(fname)
 
-            context_input = torch.cat((context_input, valid_data["context_vecs"][:params["train_size"]]), dim = 0)
+            context_input = torch.cat((context_input, valid_data["context_vecs"][:params["valid_size"]]), dim = 0)
             # print("context shape:", context_input.shape)
             # print("train context", context_input.shape) 
-            candidate_input = torch.cat((candidate_input, valid_data["candidate_vecs"][:params["train_size"]]), dim = 0)
             # print("candidate shape:", candidate_input.shape)
             # print("candidate:", candidate_input)
-            label_input = torch.cat((label_input, valid_data["labels"][:params["train_size"]]), dim = 0)
-            bi_encoder_score = torch.cat((bi_encoder_score, valid_data["nn_scores"][:params["train_size"]]), dim = 0)
+            world = torch.cat((world, valid_data["worlds"][:params["valid_size"]]), dim = 0)
+            idxs = torch.cat((idxs, valid_data["indexes"][:params["valid_size"]]), dim = 0)
+            label_input = torch.cat((label_input, valid_data["labels"][:params["valid_size"]]), dim = 0)
+            bi_encoder_score = torch.cat((bi_encoder_score, valid_data["nn_scores"][:params["valid_size"]]), dim = 0)
     bi_val_mrr=torch.mean(1/(label_input+1)).item()
     bi_val_accuracy = torch.mean((label_input == 0).float()).item()
     bi_val_recall_4 = torch.mean((label_input <= 3).float()).item()
@@ -446,13 +463,15 @@ def main(params):
         label_input = label_input[:max_n]
     # print("valid context", context_input.shape)
     # print("valid candidate", candidate_input.shape)
-    context_input = modify(context_input, candidate_input, params, mode = "valid", wo64=params["without_64"])
+    if params["top_k"]<100:
+        context_input = modify(context_input, candidate_input_valid, params, world, idxs, mode = "valid", wo64=params["without_64"])
     # print("valid modify", context_input.shape)
     if params["zeshel"]:
         src_input = valid_data["worlds"][:params["valid_size"]]
-        valid_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score)
+        valid_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, world, idxs)
+
     else:
-        valid_tensor_data = TensorDataset(context_input, label_input, bi_encoder_score)
+        valid_tensor_data = TensorDataset(context_input, label_input, bi_encoder_score, world, idxs)
     valid_sampler = SequentialSampler(valid_tensor_data)
 
     valid_dataloader = DataLoader(
@@ -494,7 +513,7 @@ def main(params):
     # elif params["optimizer"]=="RMSprop":
         # optimizer = optim.RMSprop(model.parameters(), lr=params["learning_rate"])
  
-    if params["architecture"] != "mlp":
+    if params["architecture"] != "mlp" and params["architecture"] != "mlp_with_bert":
         optimizer.step()
         scheduler.step()
         for i in range(int(len(train_tensor_data) / params["train_batch_size"] / params["gradient_accumulation_steps"]) * epoch_idx_global + previous_step):
@@ -543,7 +562,10 @@ def main(params):
             # print(batch[1].shape)
             context_input = batch[0] 
             label_input = batch[1]
-
+            if params["top_k"]>100:
+                world = batch[4]
+                idxs = batch[5]
+                context_input = modify(context_input, candidate_input_train, params, world, idxs, mode = "train", wo64 = params["without_64"])
             if params["hard_negative"]:
                 bi_encoder_score = batch[3]
                 loss, _ = reranker(context_input, label_input, context_length, bi_encoder_score = bi_encoder_score)
@@ -619,6 +641,7 @@ def main(params):
         train_acc=evaluate(
             reranker,
             train_dataloader,
+            candidate_input = candidate_input_train,
             device=device,
             logger=logger,
             context_length=context_length,
@@ -633,6 +656,10 @@ def main(params):
                 batch = tuple(t.to(device) for t in batch)
                 context_input = batch[0] 
                 label_input = batch[1]
+                if params["top_k"]>100:
+                    world = batch[4]
+                    idxs = batch[5]
+                    context_input = modify(context_input, candidate_input_valid, params, world, idxs, mode = "valid", wo64 = params["without_64"])
                 val_loss, _ = reranker(context_input, label_input, context_length)
                             # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
                 val_loss_sum += val_loss.item()
@@ -654,6 +681,7 @@ def main(params):
             train_acc=evaluate(
                 reranker,
                 train_dataloader,
+                candidate_input = candidate_input_train,
                 device=device,
                 logger=logger,
                 context_length=context_length,
@@ -672,6 +700,7 @@ def main(params):
         val_acc=evaluate(
             reranker,
             valid_dataloader,
+            candidate_input = candidate_input_valid,
             device=device,
             logger=logger,
             context_length=context_length,
@@ -758,7 +787,7 @@ def main(params):
             candidate_input = candidate_input[:max_n]
             label_input = label_input[:max_n]
 
-        context_input = modify(context_input, candidate_input, params, mode = "test", wo64=params["without_64"])
+        context_input = modify(context_input, candidate_input, params, world, idxs, mode = "test", wo64=params["without_64"])
         if params["zeshel"]:
             src_input = train_data['worlds']
             train_tensor_data = TensorDataset(context_input, label_input, src_input)
@@ -776,6 +805,7 @@ def main(params):
         train_acc=evaluate(
             reranker,
             train_dataloader,
+            candidate_input = candidate_input_train,
             device=device,
             logger=logger,
             context_length=context_length,
@@ -808,7 +838,7 @@ def main(params):
             candidate_input = candidate_input[:max_n]
             label_input = label_input[:max_n]
 
-        context_input = modify(context_input, candidate_input, params, mode = "test", wo64 = params["without_64"])
+        context_input = modify(context_input, candidate_input, params, world, idxs, mode = "test", wo64 = params["without_64"])
         if params["zeshel"]:
             src_input = valid_data['worlds']
             valid_tensor_data = TensorDataset(context_input, label_input, src_input)
@@ -826,6 +856,7 @@ def main(params):
         val_acc=evaluate(
             reranker,
             valid_dataloader,
+            candidate_input = candidate_input_valid,
             device=device,
             logger=logger,
             context_length=context_length,
@@ -864,12 +895,13 @@ def main(params):
         if i == 0:
             test_data = torch.load(fname)
             context_input = test_data["context_vecs"]
-            candidate_input = test_data["candidate_vecs"]
+            candidate_input_test = test_data["candidate_vecs"]
+            world = test_data["worlds"]
+            idxs = test_data["indexes"]
             label_input = test_data["labels"]
         else:
             test_data = torch.load(fname)
             context_input = torch.cat((context_input, test_data["context_vecs"]), dim = 0)
-            candidate_input = torch.cat((candidate_input, test_data["candidate_vecs"]), dim = 0)
             label_input = torch.cat((label_input, test_data["labels"]), dim = 0)
 
     
@@ -879,10 +911,10 @@ def main(params):
         candidate_input = candidate_input[:max_n]
         label_input = label_input[:max_n]
 
-    context_input = modify(context_input, candidate_input, params, mode = "test", wo64 = params["without_64"])
+    context_input = modify(context_input, candidate_input_test, params, world, idxs, mode = "test", wo64 = params["without_64"])
     if params["zeshel"]:
         src_input = test_data['worlds']
-        test_tensor_data = TensorDataset(context_input, label_input, src_input)
+        test_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, world, idxs)
     else:
         test_tensor_data = TensorDataset(context_input, label_input)
     test_sampler = RandomSampler(test_tensor_data)
@@ -897,6 +929,7 @@ def main(params):
     test_acc=evaluate(
         reranker,
         test_dataloader,
+        candidate_input = candidate_input_test,
         device=device,
         logger=logger,
         context_length=context_length,

@@ -40,8 +40,9 @@ def get_topk_predictions(
     nn_labels = []
     nn_worlds = []
     nn_scores = []
+    nn_idxs = []
     stats = {}
-
+    
     if is_zeshel:
         world_size = len(WORLDS)
     else:
@@ -52,6 +53,12 @@ def get_topk_predictions(
         cand_cls_list=[cand_cls_list]
         cand_cls_list=[cand_cls_list]
 
+    if params["mode"] == "valid":
+        src_minus = 8
+    elif params["mode"] == "test":
+        src_minus = 12
+    else:
+        src_minus = 0
     logger.info("World size : %d" % world_size)
 
     for i in range(world_size):
@@ -133,21 +140,20 @@ def get_topk_predictions(
                 continue
             cand_encode_list[srcs[i].item()] = cand_encode_list[srcs[i].item()].to(device)
 
-
-            if params["architecture"] == "baseline":
+            if params["architecture"] == "mlp_with_bert":
                 candidate_pool[srcs[i].item()] = candidate_pool[srcs[i].item()].to(device)
-                cur_candidates = candidate_pool[srcs[i].item()][inds]
-            else:
-                cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
-            if params["architecture"] == "raw_context_text" or params["architecture"] == "baseline":
+                # cur_candidates = candidate_pool[srcs[i].item()][inds]
+            # else:
+                # cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
+            
+            if params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
                 nn_context.append(context_input[i].cpu().tolist())#(1024)
             else:
                 nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
-
+            nn_idxs.append(inds.tolist())
             nn_scores.append(value.tolist())
-            nn_candidates.append(cur_candidates.cpu().tolist())
             nn_labels.append(pointer)
-            nn_worlds.append(src)
+            nn_worlds.append(srcs[i].item()-src_minus)
             # if pointer == -1:
             #     # pointer = j + 1
 
@@ -177,23 +183,28 @@ def get_topk_predictions(
     logger.info(res.output())
 
     nn_context = torch.FloatTensor(nn_context) # (10000,1024)
-    nn_candidates = torch.FloatTensor(nn_candidates) # (10000,64,1024) -> (10000,65,1024)
     nn_labels = torch.LongTensor(nn_labels)
+    nn_idxs = torch.LongTensor(nn_idxs)
     nn_scores = torch.FloatTensor(nn_scores)
-
+    # print(nn_worlds)
     nn_data = {
         'context_vecs': nn_context,
-        'candidate_vecs': nn_candidates,
         'labels': nn_labels,
-        'nn_scores': nn_scores
+        'nn_scores': nn_scores,
+        'indexes': nn_idxs
     }
+    if params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
+        nn_data["candidate_vecs"] = list(candidate_pool.values())
+    else:
+        nn_data["candidate_vecs"] = list(cand_encode_list.values())
+    # print("candidate", nn_data["candidate_vecs"])
     print("context shape", nn_context.shape)
-    print("candidate shape", nn_candidates.shape)
     print("score shape", nn_scores.shape)
-    
+    print("index shape", nn_idxs.shape)
     print("labels", nn_labels.shape)
     if is_zeshel:
         nn_data["worlds"] = torch.LongTensor(nn_worlds)
+    print("worlds", nn_data["worlds"].shape)
     
     return nn_data
 

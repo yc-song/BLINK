@@ -184,6 +184,8 @@ class BiEncoderRanker(torch.nn.Module):
         token_idx_cands, segment_idx_cands, mask_cands = to_bert_input(
             cand_vecs, self.NULL_IDX
         )
+        print(token_idx_cands.size())
+
         _, embedding_cands, _, cls_cands = self.model(
             None, None, None, token_idx_cands, segment_idx_cands, mask_cands
         )

@@ -14,8 +14,6 @@ from blink.common.ranker_base import get_model_obj
 from pytorch_transformers.tokenization_bert import BertTokenizer
 from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from blink.common.params import BlinkParser
-from blink.common.params import ENT_START_TAG, ENT_END_TAG, ENT_TITLE_TAG
-from blink.common.ranker_base import BertEncoder, get_model_obj
 
 def load_mlp(params):
     # Init model
@@ -31,19 +29,6 @@ class MlpModel(nn.Module):
         self.device=torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )
-        self.tokenizer = BertTokenizer.from_pretrained(
-            params["bert_model"], do_lower_case=params["lowercase"]
-        )
-        special_tokens_dict = {
-            "additional_special_tokens": [
-                ENT_START_TAG,
-                ENT_END_TAG,
-                ENT_TITLE_TAG,
-            ],
-        }
-        self.tokenizer.add_special_tokens(special_tokens_dict)
-        self.START_TOKEN = self.tokenizer.cls_token
-        self.END_TOKEN = self.tokenizer.sep_token
         self.n_gpu = torch.cuda.device_count()
         self.data_parallel=1
         self.tokenizer=BertTokenizer.from_pretrained(
@@ -55,8 +40,6 @@ class MlpModel(nn.Module):
         # self.model = torch.nn.DataParallel(self.model)
     def build_model(self):
         self.model=MlpModule(self.params)
-        if self.params["architecture"] == "mlp_with_bert":
-            self.model = MlpwithBERTModule(self.params, self.tokenizer)
     def save_model(self, output_dir):
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
@@ -67,26 +50,21 @@ class MlpModel(nn.Module):
         else:
             state_dict = torch.load(fname)
         self.model.load_state_dict(state_dict)
-    def forward(self, input, label_input, context_length,  bi_encoder_score = None, evaluate = False):
+    def forward(self, input, label_input, context_length, bi_encoder_score = None, evaluate = False):
         # summary(self.model, input_size=(1, 2, 1024))
 
         # input shape: (batch size, top_k, 2, bert_hidden_dimension)
         # score shape: (batch_size, top_k)
-        print(self.params["sampling"])
         if not self.params["sampling"]:
-            if self.params["architecture"] == "mlp_with_bert":
-
-                scores=torch.squeeze(self.model(input[:,:,0,:], input[:,:,1,:]), dim=2)
-            else:
-                scores=torch.squeeze(self.model(input), dim=2)
+            scores=torch.squeeze(self.model(input), dim=2)
             if self.params["binary_loss"]:
-                criterion = torch.nn.BCEWithLogitsLoss()
+                criterion = torch.nn.BCEWithLogitsLoss(weight = weights)
             else:
-                criterion = torch.nn.CrossEntropyLoss()
-            loss=criterion(scores, label_input)
+                criterion = torch.nn.CrossEntropyLoss(weight = weights)
+            loss=criterion(scores, label_input, reduction="mean")
         else:    
             if not evaluate:
-                num_samples = self.params["num_samples"] # the number of negative samples
+                num_samples = 30 # the number of negative samples
                 label_input = torch.unsqueeze(label_input, dim = 1)
                 # Making target tensor for BCELoss
                 # Target tensor shape: (batch_size, num_samples + 1)
@@ -178,84 +156,35 @@ class MlpModule(nn.Module):
             input = self.act_fn(layer(self.dropout(input)))
         input = self.layers[-1](self.dropout(input))
         return input
-
-
-class MlpwithBERTModule(nn.Module):
-    def __init__(self, params, tokenizer):
-        super(MlpwithBERTModule, self).__init__()
-        self.params = params
-        ctxt_bert = BertModel.from_pretrained(params["bert_model"])
-        cand_bert = BertModel.from_pretrained(params['bert_model'])
-        ctxt_bert.resize_token_embeddings(len(tokenizer))
-        cand_bert.resize_token_embeddings(len(tokenizer))
-        self.mlpmodel=MlpModule(self.params)
-        self.tokenizer = BertTokenizer.from_pretrained(
-            params["bert_model"], do_lower_case=params["lowercase"]
-        )
-        special_tokens_dict = {
-            "additional_special_tokens": [
-                ENT_START_TAG,
-                ENT_END_TAG,
-                ENT_TITLE_TAG,
-            ],
-        }
-        self.device=torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
-        self.tokenizer.add_special_tokens(special_tokens_dict)
-        self.START_TOKEN = self.tokenizer.cls_token
-        self.END_TOKEN = self.tokenizer.sep_token
-        self.NULL_IDX = self.tokenizer.pad_token_id
-        self.context_encoder = BertEncoder(
-            ctxt_bert,
-            params["out_dim"],
-            layer_pulled=params["pull_from_layer"],
-            add_linear=params["add_linear"],
-        )
-        self.cand_encoder = BertEncoder(
-            cand_bert,
-            params["out_dim"],
-            layer_pulled=params["pull_from_layer"],
-            add_linear=params["add_linear"],
-        )
-        self.config = ctxt_bert.config
-
-    def forward(
-        self,
-        token_idx_ctxt,
-        token_idx_cands,
-        segment_idx_ctxt = None,
-        mask_ctxt = None,
-        segment_idx_cands = None,
-        mask_cands = None,
-    ):
-        embedding_ctxt = None
-        cls_ctxt=None
-        batch_size = token_idx_ctxt.size(0)
-        candidate_size = token_idx_ctxt.size(1)
-        embedding_shape = token_idx_ctxt.size(2)
-        token_idx_ctxt = token_idx_ctxt.reshape((batch_size * candidate_size, embedding_shape))
-        token_idx_ctxt = torch.tensor(token_idx_ctxt).long()
-        segment_idx_ctxt = token_idx_ctxt * 0
-        mask_ctxt = token_idx_ctxt != self.NULL_IDX
-        if token_idx_ctxt is not None:
-            embedding_ctxt, _ = self.context_encoder(
-                token_idx_ctxt, segment_idx_ctxt, mask_ctxt
-            )
-        embedding_ctxt = embedding_ctxt.view(batch_size,candidate_size,-1)
-        embedding_cands = None
-        cls_cands=None
-        token_idx_cands = token_idx_cands.reshape((batch_size * candidate_size, embedding_shape)) 
-        token_idx_cands = torch.tensor(token_idx_cands).long()
-        segment_idx_cands = token_idx_cands * 0
-        mask_cands = token_idx_cands != self.NULL_IDX
-        if token_idx_cands is not None:
-            embedding_cands, _ = self.cand_encoder(
-                token_idx_cands, segment_idx_cands, mask_cands, data_type="candidate"
-            )
-        embedding_cands = embedding_ctxt.view(batch_size,candidate_size,-1)
-        return self.mlpmodel(torch.cat((embedding_ctxt.unsqueeze(dim = 2), embedding_cands.unsqueeze(dim = 2)), dim = 2))
-
+        # if not decoding: 
+        #     if not self.params["dim_red"]:
+        #         # print("1-1")
+        #         for i in range(self.params["layers"]):
+        #             # print("1-2")
+        #             input=self.linear(input)
+        #         return self.linear2(input)
+        #     else:
+        #         # print("2-1")
+        #         input=self.linear_red1(input)
+        #         for i in range(self.params["layers"]-1):
+        #             # print("2-2")
+        #             input=self.linear_red2(input)
+        #         input = self.linear_red3(input) 
+        #         return input
+        # else:
+        #     input=self.linear_red1(input)
+        #     for i in range(self.params["layers"]-1):
+        #         input_shape = input.size(2)
+        #         fc_red4 = nn.Linear(input_shape, input_shape/2)
+        #         input = self.dropout(input)
+        #         input = fc_red4(input)
+        #         input = self.act_fn(input)
+        #     input_shape = input.size(2)            
+        #     fc_red5 = nn.Linear(input_shape, 1)
+        #     input = self.dropout(input)
+        #     input = fc_red5(input)
+        #     input = self.act_fn(input)
+            # return input
 
 # class BertPreTrainedModel(PreTrainedModel):
 #     """ An abstract class to handle weights initialization and

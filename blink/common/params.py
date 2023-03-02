@@ -164,7 +164,7 @@ class BlinkParser(argparse.ArgumentParser):
             "--architecture",
             default=config["architecture"],
             type=str,
-            help="mlp, bert, roberta, special_token, raw_context_text",
+            help="mlp, bert, roberta, special_token, raw_context_text, mlp_with_bert",
         )
         parser.add_argument(
             "--pull_from_layer", type=int, default=-1, help="Layers to pull from BERT",
@@ -296,6 +296,12 @@ class BlinkParser(argparse.ArgumentParser):
             default=config["hard_negative"],
             type=bool,
             help="Random sampling or hard negative mining.",
+        )
+        parser.add_argument(
+            "--num_samples",
+            default=config["num_samples"],
+            type=bool,
+            help="number of samples.",
         )
         parser.add_argument(
             "--weight_decay",

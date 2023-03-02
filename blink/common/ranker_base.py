@@ -31,7 +31,6 @@ class BertEncoder(nn.Module):
             token_ids, segment_ids, attention_mask
         )
         # get embedding of [M_s] and [ENT] token (context: token_id=1, candidate: token_id=2)
-        torch.set_printoptions(threshold=10_000)
         if (data_type =="context"):
             m_s_index=(token_ids==1).nonzero(as_tuple=True)[1]
         elif (data_type=="candidate"):
