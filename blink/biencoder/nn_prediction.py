@@ -103,46 +103,23 @@ def get_topk_predictions(
                     pointer = j
                     break
             stats[src].add(pointer)
-# Speical tokens
-            # if params["mode"] != "train":
-            #     if pointer == -1:
-            #         pointer = j + 1
-            #         cand_encode_list[srcs[i].item()]=cand_encode_list[srcs[i].item()].to(device)
-            #         cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
-            #         cur_candidates=torch.cat((cur_candidates,cand_encode_list[srcs[i].item()][label_ids[i]]), dim=0) #(65,1024)
-            #         if params["architecture"] == "raw_context_text":
-            #             nn_context.append(context_input[i].cpu().tolist())#(1024)
-            #         else:
-            #             nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
-
-            #     else:
-            #         cand_encode_list[srcs[i].item()]=cand_encode_list[srcs[i].item()].to(device)
-            #         cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
-            #         if params["architecture"] == "raw_context_text":
-            #             nn_context.append(context_input[i].cpu().tolist())#(1024)
-            #         else:
-            #             nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
-            #         if params["bert_model"]=="bert-large-uncased":
-            #             cur_candidates=torch.cat((cur_candidates,torch.rand((1, 1024), device=device)), dim=0) #(65,1024)
-            #         elif params["bert_model"]=="bert-base-cased":
-            #             cur_candidates=torch.cat((cur_candidates,torch.rand((1, 768), device=device)), dim=0) #(65,1024)
-                
-            #     # nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
 
             if pointer == -1:
                 continue
             cand_encode_list[srcs[i].item()] = cand_encode_list[srcs[i].item()].to(device)
-
-
+            # candidate_pool stores entity "tokens". In contrast, candidate_encode_list stores embedding of entities.
+            # architecture "baseline": store context and candidate "tokens". where each shapes is (128, 128)
+            # architecture "mlp (Approach 1)" and "special tokens (Approach 2)": store context and candidate "embeddings", where each shape is (768, 768) in BERT-base and (1024, 1024) in BERT-large
+            # architecture "raw_context_text (Approach 3)": store context in tokens and candidate in embeddings, where each shape is (128, 768) in BERT-base and (128, 1024) in BERT-large
             if params["architecture"] == "baseline":
-                candidate_pool[srcs[i].item()] = candidate_pool[srcs[i].item()].to(device)
+                candidate_pool[srcs[i].item()] = candidate_pool[srcs[i].item()].to(device) # Save candidate tokens
                 cur_candidates = candidate_pool[srcs[i].item()][inds]
             else:
-                cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
+                cur_candidates = cand_encode_list[srcs[i].item()][inds] # Save candidate embedding
             if params["architecture"] == "raw_context_text" or params["architecture"] == "baseline":
-                nn_context.append(context_input[i].cpu().tolist())#(1024)
+                nn_context.append(context_input[i].cpu().tolist()) # Save context tokens
             else:
-                nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
+                nn_context.append(embedding_ctxt[i].cpu().tolist() )# Save context embedding (mlp and special_tokens)
 
             nn_scores.append(value.tolist())
             nn_candidates.append(cur_candidates.cpu().tolist())
@@ -156,13 +133,6 @@ def get_topk_predictions(
             if not save_predictions:
                 continue
 
-            # # add examples in new_data
-            # cand_encode_list[srcs[i].item()]=cand_encode_list[srcs[i].item()].to(device)
-            # cur_candidates = cand_encode_list[srcs[i].item()][inds]
-            # nn_context.append(embedding_ctxt[i].cpu().tolist())
-            # nn_candidates.append(cur_candidates.cpu().tolist())
-            # nn_labels.append(pointer)
-            # nn_worlds.append(src)
 
     res = Stats(top_k)
     for src in range(world_size):
