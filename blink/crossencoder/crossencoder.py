@@ -361,13 +361,17 @@ class RawTextBertModel(BertModel):
         output_hidden_states=None,
         return_dict=None,
     ):
+        # This class takes the input in the form of (Raw context text, [ENT] BERT embedding)
+        # The input is in the shape of (Batch size * # of retrieved candidates, max_context_length (e.g. 128) + dimension of BERT hidden layer (e.g. 768))
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
         if token_type_ids is None:
             token_type_ids = torch.zeros_like(input_ids)
-        torch.set_printoptions(threshold=10_000)
         max_context_length=self.params["max_context_length"]
+        # We have 129 tokens (i.e. 128 raw context tokens + 1 ent embedding). Thus, we got attention mask whose shape is 129 for each batch
         attention_mask=attention_mask[:,:max_context_length+1]
+        
+        #### Copied & Pasted from Huggingface BERT ####
         # We create a 3D attention mask from a 2D tensor mask.
         # Sizes are [batch_size, 1, 1, to_seq_length]
         # So we can broadcast to [batch_size, num_heads, from_seq_length, to_seq_length]
@@ -397,19 +401,20 @@ class RawTextBertModel(BertModel):
             head_mask = head_mask.to(dtype=next(self.parameters()).dtype) # switch to fload if need + fp16 compatibility
         else:
             head_mask = [None] * self.config.num_hidden_layers
+        #### Copied & Pasted from Huggingface BERT ####
+        
         device = torch.device("cuda")
-        np.set_printoptions(threshold=1000000)
+        # Only get embeddings of raw_context_text
         token_type_ids=torch.ones_like(token_type_ids[:,:max_context_length])
-        # embedding_output = self.embeddings(input_ids[:,:max_context_length].int(), position_ids=position_ids, token_type_ids=token_type_ids[:,:max_context_length].int()) 
         embedding_output = self.embeddings(input_ids[:,:max_context_length].int(), position_ids=position_ids, token_type_ids=token_type_ids.int()) 
+        # Concatenate embedding with ENT embedding. IThe shape becomes (batch_size * top_k , 129, 768)
         embedding_output= torch.cat((embedding_output,input_ids[:,max_context_length:].unsqueeze(dim=1)), dim = 1)
-
         encoder_outputs = self.encoder(embedding_output,
                                        extended_attention_mask,
                                        head_mask=head_mask)
-        sequence_output = encoder_outputs[0]
 
+        ## Below are the same as Hugginface BERT
+        sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output)
         outputs = (sequence_output, pooled_output,) + encoder_outputs[1:]  # add hidden_states and attentions if they are here
-        
         return outputs  # sequence_output, pooled_output, (hidden_states), (attentions)
