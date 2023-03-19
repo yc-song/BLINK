@@ -26,7 +26,7 @@ from pytorch_transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from pytorch_transformers.optimization import WarmupLinearSchedule
 from pytorch_transformers.tokenization_bert import BertTokenizer
 import blink.candidate_retrieval.utils
-from blink.crossencoder.crossencoder import CrossEncoderRanker, load_crossencoder
+from blink.crossencoder.crossencoder import CrossEncoderRanker, load_crossencoder, MlpwithBiEncoderRanker
 import logging
 import wandb
 import blink.candidate_ranking.utils as utils
@@ -42,12 +42,7 @@ logger = None
 def modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = True):
     device = torch.device('cuda')
     # get values of candidates first
-    cand_list = []
-    for i in range(context_input.size(0)):
-        candidate_input[world[i].item()] = candidate_input[world[i].item()].to(device) 
-        cand_list.append(candidate_input[world[i].item()][idxs[i]].squeeze(dim = 0).tolist())
-    candidate_input = torch.FloatTensor(cand_list).to(device)
-
+    candidate_input = candidate_input[idxs].squeeze(dim = 0).to(device)
     top_k=params["top_k"]
     ## context_input shape: (Size ,1024) e.g.  (10000, 1024)
     ## candidate_input shape: (Size, 65, 1024) e.g. (10000, 65, 1024)
@@ -71,11 +66,10 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
             return new_input
     else:  
         context_input=context_input.unsqueeze(dim=1).expand(-1,top_k,-1).to(device)
-        if params["architecture"]=="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert":
+        if params["architecture"]=="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert" or params["architecture"]=="baseline":
             new_input=torch.stack((context_input,candidate_input),dim=2) # shape: (Size, 65, 2, 1024) e.g. (10000, 65, 2 , 1024)
         elif params["architecture"]== "raw_context_text":
             new_input=torch.cat((context_input,candidate_input),dim=2)
-        # print(new_input.shape)
         return new_input
         
 
@@ -225,7 +219,6 @@ def get_scheduler(params, optimizer, len_train_data, logger, last_epoch = -1):
 
 
 def main(params):
-    print(params["act_fn"])
     gc.collect()
     nested_break=False
     # wandb.init(project=params["wandb"], config=parser, resume="must", id=<original_sweeps_run_id>)
@@ -285,8 +278,10 @@ def main(params):
             label_input = torch.cat((label_input, train_data["labels"][:params["train_size"]]), dim = 0)
             bi_encoder_score = torch.cat((bi_encoder_score, train_data["nn_scores"][:params["train_size"]]), dim = 0)
     # Init model
-    if params["architecture"]=="mlp" or params["architecture"] == "mlp_with_bert":
+    if params["architecture"]=="mlp":
         reranker= MlpModel(params)
+    elif params["architecture"] == "mlp_with_bert":
+        reranker = MlpwithBiEncoderRanker(params)
     else:
         reranker = CrossEncoderRanker(params)
     tokenizer = reranker.tokenizer
@@ -306,7 +301,7 @@ def main(params):
         # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
         # scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
         # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=500, factor=0.9, min_lr=0.000001)
-    elif params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
+    elif params["architecture"]=="special_token" or params["architecture"]=="raw_context_text" or params["architecture"] == "baseline" or params["architecture"] != "mlp_with_bert":
         optimizer = get_optimizer(model, params)
         # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
 
@@ -404,7 +399,7 @@ def main(params):
         batch_size=params["train_batch_size"]
     )
 
-    if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
+    if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text" or params["architecture"] != "mlp_with_bert" or params["architecture"] != "baseline":
         scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
     valid_split = params["valid_split"]
     for i in range(valid_split):
@@ -513,7 +508,7 @@ def main(params):
     # elif params["optimizer"]=="RMSprop":
         # optimizer = optim.RMSprop(model.parameters(), lr=params["learning_rate"])
  
-    if params["architecture"] != "mlp" and params["architecture"] != "mlp_with_bert":
+    if params["architecture"] != "mlp" and params["architecture"] != "mlp_with_bert" or params["architecture"] != "baseline":
         optimizer.step()
         scheduler.step()
         for i in range(int(len(train_tensor_data) / params["train_batch_size"] / params["gradient_accumulation_steps"]) * epoch_idx_global + previous_step):
@@ -991,7 +986,7 @@ if __name__ == "__main__":
 
     # args = argparse.Namespace(**params)
     args = parser.parse_args()
-    # print(args)
+    print(args)
 
     params = args.__dict__
 

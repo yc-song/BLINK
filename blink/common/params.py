@@ -15,7 +15,6 @@ import json
 
 with open('./blink/common/crossencoder_config.json') as f:
     config = json.load(f)
-    print(config)
 
 
 
@@ -23,6 +22,15 @@ ENT_START_TAG = "[unused1]"
 ENT_END_TAG = "[unused2]"
 ENT_TITLE_TAG = "[unused3]"
 
+def str2bool(v):
+    if isinstance(v, bool):
+       return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 class BlinkParser(argparse.ArgumentParser):
     """
@@ -79,7 +87,7 @@ class BlinkParser(argparse.ArgumentParser):
         parser.add_argument(
             "--data_parallel",
             default = config["data_parallel"],
-            type = bool,
+            type = str2bool,
             help="Whether to distributed the candidate generation process.",
         )
         parser.add_argument(
@@ -93,7 +101,7 @@ class BlinkParser(argparse.ArgumentParser):
         parser.add_argument(
             "--zeshel",
             default=config["zeshel"],
-            type=bool,
+            type=str2bool,
             help="Whether the dataset is from zeroshot.",
         )
 
@@ -181,7 +189,7 @@ class BlinkParser(argparse.ArgumentParser):
         parser.add_argument(
             "--add_linear",
             default= False,
-            type= bool,
+            type= str2bool,
             help="Whether to add an additonal linear projection on top of BERT.",
         )
         parser.add_argument(
@@ -205,7 +213,7 @@ class BlinkParser(argparse.ArgumentParser):
         parser.add_argument(
             "--resume",
             default=config["resume"],
-            type=bool,
+            type=str2bool,
             help="wandb project name.",
         )
 
@@ -220,7 +228,7 @@ class BlinkParser(argparse.ArgumentParser):
         parser.add_argument(
             "--without_64",
             default=config["without_64"],
-            type=bool,
+            type=str2bool,
             help="to include 64 or not",
         )
         parser.add_argument(
@@ -233,7 +241,7 @@ class BlinkParser(argparse.ArgumentParser):
         parser.add_argument(
             "--decoder",
             default=config["decoder"],
-            type=bool,
+            type=str2bool,
             help="decoder strucutre or not.",
         )
         parser.add_argument(
@@ -282,25 +290,25 @@ class BlinkParser(argparse.ArgumentParser):
         parser.add_argument(
             "--sampling",
             default=config["sampling"],
-            type=bool,
+            type=str2bool,
             help="The txt file where the the evaluation results will be written.",
         )
         parser.add_argument(
             "--binary_loss",
             default=config["binary_loss"],
-            type=bool,
+            type=str2bool,
             help="Binary cross entropy loss or multi class cross entropy loss.",
         )
         parser.add_argument(
             "--hard_negative",
             default=config["hard_negative"],
-            type=bool,
+            type=str2bool,
             help="Random sampling or hard negative mining.",
         )
         parser.add_argument(
             "--num_samples",
             default=config["num_samples"],
-            type=bool,
+            type=str2bool,
             help="number of samples.",
         )
         parser.add_argument(
@@ -390,11 +398,11 @@ class BlinkParser(argparse.ArgumentParser):
             help="Which type of layers to optimize in BERT",
         )
         parser.add_argument(
-            "--shuffle", type=bool, default=False, 
+            "--shuffle", type=str2bool, default=False, 
             help="Whether to shuffle train data",
         )
         parser.add_argument(
-            "--save", type=bool, default=config["save"], 
+            "--save", type=str2bool, default=config["save"], 
             help="directory to save models",
         )
         parser.add_argument(

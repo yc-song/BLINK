@@ -33,7 +33,7 @@ from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from blink.common.ranker_base_cross import BertEncoder, get_model_obj
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import ENT_START_TAG, ENT_END_TAG, ENT_TITLE_TAG
-
+from blink.crossencoder.mlp import MlpModule, MlpModel
 def load_crossencoder(params):
     # Init model
     crossencoder = CrossEncoderRanker(params)
@@ -50,7 +50,7 @@ class CrossEncoderModule(torch.nn.Module):
         elif params["architecture"] == "raw_context_text":
             encoder_model = RawTextBertModel.from_pretrained(model_path)
             encoder_model.params=params
-        else:
+        elif params["architecture"] == "baseline" or params["architecture"] == "mlp_with_bert":
             encoder_model = BertModel.from_pretrained(model_path)
         encoder_model.resize_token_embeddings(len(tokenizer))
         self.encoder = BertEncoder(
@@ -64,7 +64,7 @@ class CrossEncoderModule(torch.nn.Module):
     def forward(
         self, token_idx_ctxt, segment_idx_ctxt, mask_ctxt,
     ):
-        embedding_ctxt = self.encoder(token_idx_ctxt, segment_idx_ctxt, mask_ctxt)
+        embedding_ctxt = self.encoder(token_idx_ctxt.int(), segment_idx_ctxt.int(), mask_ctxt.int())
         return embedding_ctxt.squeeze(-1)
 
 
@@ -175,6 +175,54 @@ class CrossEncoderRanker(torch.nn.Module):
         # nullify elements in case self.NULL_IDX was not 0
         # token_idx = token_idx * mask.long()
         return token_idx, segment_idx, mask
+
+class MlpwithBiEncoderModule(CrossEncoderModule):
+    def __init__(self, params, tokenizer):
+        super(MlpwithBiEncoderModule, self).__init__(params, tokenizer)
+        model_path = params["bert_model"]
+        candidate_encoder_model = BertModel.from_pretrained(model_path)
+        candidate_encoder_model.resize_token_embeddings(len(tokenizer))
+        self.mlpmodule = MlpModule(params)
+        self.candidate_encoder = BertEncoder(
+            candidate_encoder_model,
+            params["out_dim"],
+            layer_pulled=params["pull_from_layer"],
+            add_linear=params["add_linear"],
+        )
+        self.candidate_config = self.candidate_encoder.bert_model.config    
+    def forward(
+        self, token_idx_ctxt, segment_idx_ctxt, mask_ctxt, token_idx_cands, segment_idx_cands, mask_cands
+    ):
+        embedding_ctxt = self.encoder(token_idx_ctxt, segment_idx_ctxt, mask_ctxt)
+        embedding_cands = self.candidate_encoder(token_idx_cands, segment_idx_cands, mask_cands)
+        mlp_input = torch.cat((embedding_ctxt.unsqueeze(dim = 1), embedding_cands.unsqueeze(dim = 1)), dim=1).unsqueeze(dim = 0)
+        output = self.mlpmodule(mlp_input)
+        return output.squeeze(2).squeeze(0)
+
+class MlpwithBiEncoderRanker(CrossEncoderRanker): 
+    def __init__(self, params, shared=None):
+        super(MlpwithBiEncoderRanker, self).__init__(params)
+        self.params = params
+
+    def build_model(self):
+        self.model = MlpwithBiEncoderModule(self.params, self.tokenizer)
+
+    def score_candidate(self, text_vecs, context_len):
+        # Encode contexts first
+        num_cand = text_vecs.size(1) # 64
+        text_vecs_ctxt = text_vecs[:,:,0,:].squeeze(dim = 2)
+        text_vecs_ctxt = text_vecs_ctxt.view(-1, text_vecs_ctxt.size(-1))
+        text_vecs_cands = text_vecs[:,:,1,:].squeeze(dim = 2)
+        text_vecs_cands = text_vecs_cands.view(-1, text_vecs_cands.size(-1))
+        token_idx_ctxt, segment_idx_ctxt, mask_ctxt = self.to_bert_input(
+            text_vecs_ctxt.int(), self.NULL_IDX, context_len,
+        )
+        token_idx_cands, segment_idx_cands, mask_cands = self.to_bert_input(
+            text_vecs_cands.int(), self.NULL_IDX, context_len,
+        )
+        embedding_ctxt = self.model(token_idx_ctxt, segment_idx_ctxt, mask_ctxt,token_idx_cands, segment_idx_cands, mask_cands)
+        print(embedding_ctxt)
+        return embedding_ctxt.view(-1, num_cand)
 
 class SpecialTokenBertModelwithSEPToken(BertModel):
     """
