@@ -221,7 +221,6 @@ class MlpwithBiEncoderRanker(CrossEncoderRanker):
             text_vecs_cands.int(), self.NULL_IDX, context_len,
         )
         embedding_ctxt = self.model(token_idx_ctxt, segment_idx_ctxt, mask_ctxt,token_idx_cands, segment_idx_cands, mask_cands)
-        print(embedding_ctxt)
         return embedding_ctxt.view(-1, num_cand)
 
 class SpecialTokenBertModelwithSEPToken(BertModel):

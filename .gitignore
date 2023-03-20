@@ -2,7 +2,9 @@
 # data folder
 data
 */data/*
-
+# data folder
+wandb
+*/wandb/*
 # libraries for wikipedia-wikidata extraction
 libs
 */libs/*
