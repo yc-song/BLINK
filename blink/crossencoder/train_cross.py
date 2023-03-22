@@ -399,7 +399,7 @@ def main(params):
         batch_size=params["train_batch_size"]
     )
 
-    if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text" or params["architecture"] != "mlp_with_bert" or params["architecture"] != "baseline":
+    if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text" or params["architecture"] == "mlp_with_bert" or params["architecture"] == "baseline":
         scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
     valid_split = params["valid_split"]
     for i in range(valid_split):
@@ -508,9 +508,8 @@ def main(params):
     # elif params["optimizer"]=="RMSprop":
         # optimizer = optim.RMSprop(model.parameters(), lr=params["learning_rate"])
  
-    if params["architecture"] != "mlp" and params["architecture"] != "mlp_with_bert" or params["architecture"] != "baseline":
+    if params["architecture"] != "mlp" and params["architecture"] == "mlp_with_bert" or params["architecture"] == "baseline":
         optimizer.step()
-        scheduler.step()
         for i in range(int(len(train_tensor_data) / params["train_batch_size"] / params["gradient_accumulation_steps"]) * epoch_idx_global + previous_step):
             scheduler.step()
     best_epoch_idx = -1
@@ -599,7 +598,7 @@ def main(params):
                     model.parameters(), params["max_grad_norm"]
                 )
                 optimizer.step()
-                if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
+                if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text" or params["architecture"]=="mlp_with_bert":
                     scheduler.step()
                 optimizer.zero_grad()
             save_interval=100
