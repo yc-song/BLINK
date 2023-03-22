@@ -585,7 +585,7 @@ def main(params):
                 if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text":
                     scheduler.step()
                 optimizer.zero_grad()
-            save_interval=100
+            save_interval=500
             if not step % save_interval and params["save"]:
                 logger.info("***** Saving fine - tuned model *****")
                 epoch_output_folder_path = os.path.join(
@@ -601,18 +601,7 @@ def main(params):
                 folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"],run.id)
                 each_file_path_and_gen_time = []
 
-                for each_file_name in os.listdir(folder_path):
-                    each_file_path = folder_path + each_file_name
-                    each_file_gen_time = os.path.getctime(each_file_path)
-                    each_file_path_and_gen_time.append(
-                        (each_file_path, each_file_gen_time)
-                    )
-                most_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[0]
-                for each_file_name in os.listdir(folder_path):
-                    each_file_path = folder_path + each_file_name
-                    print(each_file_name)
-                    if each_file_path != most_recent_file and each_file_name[0]=="e":
-                        os.remove(each_file_path)
+   
         # utils.save_model(model, tokenizer, epoch_output_folder_path)
         # reranker.save_model(epoch_output_folder_path)
         logger.info("Evaluation on the training dataset")
@@ -940,6 +929,7 @@ def main(params):
             (each_file_path, each_file_gen_time)
         )
     most_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[0]
+    
     for each_file_name in os.listdir(folder_path):
         each_file_path = folder_path + each_file_name
         if each_file_path != most_recent_file and each_file_path[0]=="e":
