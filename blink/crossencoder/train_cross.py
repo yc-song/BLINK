@@ -651,7 +651,7 @@ def main(params):
             "params/epoch": epoch_idx
             })
             val_loss_sum = 0
-        if params["architecture"] != "raw_context_text" or params["architecture"] != "mlp_with_bert":
+        if params["architecture"] != "raw_context_text" and params["architecture"] != "mlp_with_bert":
             logger.info("Evaluation on the training dataset")
             train_acc=evaluate(
                 reranker,
