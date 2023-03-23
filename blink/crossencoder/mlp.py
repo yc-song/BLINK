@@ -72,7 +72,6 @@ class MlpModel(nn.Module):
 
         # input shape: (batch size, top_k, 2, bert_hidden_dimension)
         # score shape: (batch_size, top_k)
-        print(self.params["sampling"])
         if not self.params["sampling"]:
             if self.params["architecture"] == "mlp_with_bert":
 

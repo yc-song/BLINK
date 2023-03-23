@@ -31,6 +31,7 @@ class BertEncoder(nn.Module):
             token_ids, segment_ids, attention_mask
         )
         # get embedding of [M_s] and [ENT] token (context: token_id=1, candidate: token_id=2)
+        embeddings_late_interaction = None
         if (data_type =="context"):
             m_s_index=(token_ids==1).nonzero(as_tuple=True)[1]
         elif (data_type=="candidate"):
@@ -41,12 +42,12 @@ class BertEncoder(nn.Module):
             embeddings = output_pooler
         else:
             embeddings=output_bert[range(output_bert.shape[0]),m_s_index]
-
+        embeddings_late_interaction=output_bert
         cls_token=output_bert[:,0,:]
         # in case of dimensionality reduction
         if self.additional_linear is not None:
             result = self.additional_linear(self.dropout(embeddings))
         else:
             result = embeddings
-        return result, cls_token
+        return result, cls_token, embeddings_late_interaction
 

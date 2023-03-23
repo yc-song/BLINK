@@ -28,7 +28,7 @@ WORLDS = {
 }
 
 domain_set = {}
-domain_set['val'] = set(['coronation_street', 'muppets', 'ice_hockey', 'elder_scrolls'])
+domain_set['valid'] = set(['coronation_street', 'muppets', 'ice_hockey', 'elder_scrolls'])
 domain_set['test'] = set(['forgotten_realms', 'lego', 'star_trek', 'yugioh'])
 domain_set['train'] = set(['american_football', 'doctor_who', 'fallout', 'final_fantasy', 'military', 'pro_wrestling', 'starwars', 'world_of_warcraft'])
 
@@ -89,10 +89,7 @@ def load_entity_dict(params):
 
 
 def convert_data(params, entity_dict, entity_map, mode):
-    if mode == "valid":
-        fname = os.path.join(params.mention_path, "val.json")
-    else:
-        fname = os.path.join(params.mention_path, mode + ".json")
+    fname = os.path.join(params.mention_path, mode + ".json")
 
     fout = open(os.path.join(params.output_path, mode + ".jsonl"), 'wt')
     cnt = 0

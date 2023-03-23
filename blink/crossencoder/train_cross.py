@@ -42,6 +42,7 @@ logger = None
 def modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = True):
     device = torch.device('cuda')
     # get values of candidates first
+    candidate_input = candidate_input.to(device)
     candidate_input = candidate_input[idxs].squeeze(dim = 0).to(device)
     top_k=params["top_k"]
     ## context_input shape: (Size ,1024) e.g.  (10000, 1024)
@@ -116,8 +117,8 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
         context_input = batch[0]
         label_input = batch[1]
         if params["top_k"]>100:
-            world = batch[4]
-            idxs = batch[5]
+            world = batch[2]
+            idxs = batch[4]
             context_input = modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = params["without_64"])
 
         with torch.no_grad():
@@ -250,18 +251,10 @@ def main(params):
                 else:
                     fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp", i))
         if i == 0:
-            # fname2 = os.path.join(params["data_path"], "train2.t7")
-            # train_data = torch.load(fname)
             train_data = torch.load(fname,  map_location=torch.device('cpu'))
-
             context_input = train_data["context_vecs"][:params["train_size"]]
-            # print("context shape:", context_input.shape)
-            # print("train context", context_input.shape) 
             candidate_input_train = train_data["candidate_vecs"]
-            world = train_data["worlds"][:params["train_size"]]
             idxs = train_data["indexes"][:params["train_size"]]
-            # print("candidate shape:", candidate_input.shape)
-            # print("candidate:", candidate_input)
             label_input = train_data["labels"][:params["train_size"]]
             bi_encoder_score = train_data["nn_scores"][:params["train_size"]]
         else:
@@ -273,7 +266,6 @@ def main(params):
             # print("train context", context_input.shape) 
             # print("candidate shape:", candidate_input.shape)
             # print("candidate:", candidate_input)
-            world = torch.cat((world, train_data["worlds"][:params["train_size"]]), dim = 0)
             idxs = torch.cat((idxs, train_data["indexes"][:params["train_size"]]), dim = 0)
             label_input = torch.cat((label_input, train_data["labels"][:params["train_size"]]), dim = 0)
             bi_encoder_score = torch.cat((bi_encoder_score, train_data["nn_scores"][:params["train_size"]]), dim = 0)
@@ -381,14 +373,15 @@ def main(params):
         context_input = context_input[:max_n]
         candidate_input = candidate_input[:max_n]
         label_input = label_input[:max_n]
-    if params["top_k"]<100:
-        context_input = modify(context_input, candidate_input_train, params, world, idxs, mode = "train", wo64 = params["without_64"])
     if params["zeshel"]:
         src_input = train_data['worlds'][:params["train_size"]]
-        train_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, world, idxs)
+    if params["top_k"]<100:
+        context_input = modify(context_input, candidate_input_train, params, src_input, idxs, mode = "train", wo64 = params["without_64"])
+    if params["zeshel"]:
+        train_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, idxs)
         
     else:
-        train_tensor_data = TensorDataset(context_input, label_input, bi_encoder_score, world, idxs)
+        train_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, idxs)
 
 
     train_sampler = RandomSampler(train_tensor_data)
@@ -423,7 +416,6 @@ def main(params):
             valid_data = torch.load(fname)
             context_input = valid_data["context_vecs"][:params["valid_size"]]
             candidate_input_valid = valid_data["candidate_vecs"]
-            world = valid_data["worlds"][:params["valid_size"]]
             idxs = valid_data["indexes"][:params["valid_size"]]
             label_input = valid_data["labels"][:params["valid_size"]]
             bi_encoder_score = valid_data["nn_scores"][:params["valid_size"]]
@@ -437,7 +429,6 @@ def main(params):
             # print("train context", context_input.shape) 
             # print("candidate shape:", candidate_input.shape)
             # print("candidate:", candidate_input)
-            world = torch.cat((world, valid_data["worlds"][:params["valid_size"]]), dim = 0)
             idxs = torch.cat((idxs, valid_data["indexes"][:params["valid_size"]]), dim = 0)
             label_input = torch.cat((label_input, valid_data["labels"][:params["valid_size"]]), dim = 0)
             bi_encoder_score = torch.cat((bi_encoder_score, valid_data["nn_scores"][:params["valid_size"]]), dim = 0)
@@ -459,14 +450,14 @@ def main(params):
     # print("valid context", context_input.shape)
     # print("valid candidate", candidate_input.shape)
     if params["top_k"]<100:
-        context_input = modify(context_input, candidate_input_valid, params, world, idxs, mode = "valid", wo64=params["without_64"])
+        context_input = modify(context_input, candidate_input_valid, params, src_input, idxs, mode = "valid", wo64=params["without_64"])
     # print("valid modify", context_input.shape)
     if params["zeshel"]:
         src_input = valid_data["worlds"][:params["valid_size"]]
-        valid_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, world, idxs)
+        valid_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, idxs)
 
     else:
-        valid_tensor_data = TensorDataset(context_input, label_input, bi_encoder_score, world, idxs)
+        valid_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, idxs)
     valid_sampler = SequentialSampler(valid_tensor_data)
 
     valid_dataloader = DataLoader(
@@ -557,8 +548,8 @@ def main(params):
             context_input = batch[0] 
             label_input = batch[1]
             if params["top_k"]>100:
-                world = batch[4]
-                idxs = batch[5]
+                world = batch[2]
+                idxs = batch[4]
                 context_input = modify(context_input, candidate_input_train, params, world, idxs, mode = "train", wo64 = params["without_64"])
             if params["hard_negative"]:
                 bi_encoder_score = batch[3]
@@ -601,7 +592,7 @@ def main(params):
                 if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text" or params["architecture"]=="mlp_with_bert":
                     scheduler.step()
                 optimizer.zero_grad()
-            save_interval=100
+            save_interval=500
             if not step % save_interval and params["save"]:
                 logger.info("***** Saving fine - tuned model *****")
                 epoch_output_folder_path = os.path.join(
@@ -615,6 +606,7 @@ def main(params):
                 'step': step,
                 }, epoch_output_folder_path)
                 folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"],run.id)
+
                 each_file_path_and_gen_time = []
 
                 for each_file_name in os.listdir(folder_path):
@@ -624,24 +616,13 @@ def main(params):
                         (each_file_path, each_file_gen_time)
                     )
                 most_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[0]
+                second_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[1]
                 for each_file_name in os.listdir(folder_path):
                     each_file_path = folder_path + each_file_name
-                    print(each_file_name)
-                    if each_file_path != most_recent_file and each_file_name[0]=="e":
+                    if (each_file_path != most_recent_file and each_file_path != second_recent_file) and each_file_name[0]=="e":
                         os.remove(each_file_path)
+
         # utils.save_model(model, tokenizer, epoch_output_folder_path)
-        # reranker.save_model(epoch_output_folder_path)
-        logger.info("Evaluation on the training dataset")
-        train_acc=evaluate(
-            reranker,
-            train_dataloader,
-            candidate_input = candidate_input_train,
-            device=device,
-            logger=logger,
-            context_length=context_length,
-            zeshel=params["zeshel"],
-            silent=params["silent"],
-        )
 
         if params["architecture"]=="mlp":
             logger.info("Loss on the validation dataset")
@@ -651,8 +632,8 @@ def main(params):
                 context_input = batch[0] 
                 label_input = batch[1]
                 if params["top_k"]>100:
-                    world = batch[4]
-                    idxs = batch[5]
+                    world = batch[2]
+                    idxs = batch[4]
                     context_input = modify(context_input, candidate_input_valid, params, world, idxs, mode = "valid", wo64 = params["without_64"])
                 val_loss, _ = reranker(context_input, label_input, context_length)
                             # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
@@ -670,7 +651,7 @@ def main(params):
             "params/epoch": epoch_idx
             })
             val_loss_sum = 0
-        if params["architecture"] != "raw_context_text":
+        if params["architecture"] != "raw_context_text" or params["architecture"] != "mlp_with_bert":
             logger.info("Evaluation on the training dataset")
             train_acc=evaluate(
                 reranker,
@@ -780,10 +761,10 @@ def main(params):
             context_input = context_input[:max_n]
             candidate_input = candidate_input[:max_n]
             label_input = label_input[:max_n]
-
-        context_input = modify(context_input, candidate_input, params, world, idxs, mode = "test", wo64=params["without_64"])
         if params["zeshel"]:
             src_input = train_data['worlds']
+        context_input = modify(context_input, candidate_input, params, src_input, idxs, mode = "test", wo64=params["without_64"])
+        if params["zeshel"]:
             train_tensor_data = TensorDataset(context_input, label_input, src_input)
         else:
             train_tensor_data = TensorDataset(context_input, label_input)
@@ -831,10 +812,10 @@ def main(params):
             context_input = context_input[:max_n]
             candidate_input = candidate_input[:max_n]
             label_input = label_input[:max_n]
-
-        context_input = modify(context_input, candidate_input, params, world, idxs, mode = "test", wo64 = params["without_64"])
         if params["zeshel"]:
             src_input = valid_data['worlds']
+        context_input = modify(context_input, candidate_input, params, src_input, idxs, mode = "test", wo64 = params["without_64"])
+        if params["zeshel"]:
             valid_tensor_data = TensorDataset(context_input, label_input, src_input)
         else:
             valid_tensor_data = TensorDataset(context_input, label_input)
@@ -888,11 +869,11 @@ def main(params):
                     fname = os.path.join(params["data_path"], "test_{}_{}.t7".format("mlp", i))
         if i == 0:
             test_data = torch.load(fname)
-            context_input = test_data["context_vecs"]
+            context_input = test_data["context_vecs"][:params["test_size"]]
             candidate_input_test = test_data["candidate_vecs"]
-            world = test_data["worlds"]
-            idxs = test_data["indexes"]
-            label_input = test_data["labels"]
+            idxs = test_data["indexes"][:params["test_size"]]
+            label_input = test_data["labels"][:params["test_size"]]
+
         else:
             test_data = torch.load(fname)
             context_input = torch.cat((context_input, test_data["context_vecs"]), dim = 0)
@@ -904,11 +885,11 @@ def main(params):
         context_input = context_input[:max_n]
         candidate_input = candidate_input[:max_n]
         label_input = label_input[:max_n]
-
-    context_input = modify(context_input, candidate_input_test, params, world, idxs, mode = "test", wo64 = params["without_64"])
     if params["zeshel"]:
-        src_input = test_data['worlds']
-        test_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, world, idxs)
+        src_input = test_data['worlds'][:params["test_size"]]
+    context_input = modify(context_input, candidate_input_test, params, src_input, idxs, mode = "test", wo64 = params["without_64"])
+    if params["zeshel"]:
+        test_tensor_data = TensorDataset(context_input, label_input, src_input, idxs)
     else:
         test_tensor_data = TensorDataset(context_input, label_input)
     test_sampler = RandomSampler(test_tensor_data)
@@ -956,21 +937,21 @@ def main(params):
     #         model_output_path, "epoch_{}".format(best_epoch_idx)
     #     )
     #     torch.save(model.state_dict(), epoch_output_folder_path)
-    ## Remove every file but the newest file
-    folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"], run.id)
-    each_file_path_and_gen_time = []
+    # each_file_path_and_gen_time = []
 
-    for each_file_name in os.listdir(folder_path):
-        each_file_path = folder_path + each_file_name
-        each_file_gen_time = os.path.getctime(each_file_path)
-        each_file_path_and_gen_time.append(
-            (each_file_path, each_file_gen_time)
-        )
-    most_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[0]
-    for each_file_name in os.listdir(folder_path):
-        each_file_path = folder_path + each_file_name
-        if each_file_path != most_recent_file and each_file_path[0]=="e":
-            os.remove(each_file_path)
+    # for each_file_name in os.listdir(folder_path):
+    #     each_file_path = folder_path + each_file_name
+    #     each_file_gen_time = os.path.getctime(each_file_path)
+    #     each_file_path_and_gen_time.append(
+    #         (each_file_path, each_file_gen_time)
+    #     )
+    # most_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[0]
+    # second_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[1]
+    # for each_file_name in os.listdir(folder_path):
+    #     each_file_path = folder_path + each_file_name
+    #     if (each_file_path != most_recent_file and each_file_path != second_recent_file) and each_file_name[0]=="e":
+    #         os.remove(each_file_path)
+
 
     # print("\rval_acc is {}".format(val_acc['mrr']))
     # print("\r")

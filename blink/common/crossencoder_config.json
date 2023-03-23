@@ -24,6 +24,7 @@
 "dim_red": 512,
 "train_size": -1,
 "valid_size": -1,
+"test_size": -1,
 "architecture": "mlp",
 "scheduler_gamma": 0.9,
 "weight_decay":0.0001,
@@ -40,5 +41,6 @@
 "split": 1,
 "train_split": 1,
 "valid_split": 1,
-"test_split": 1
+"test_split": 1,
+"late_interaction": false
 }

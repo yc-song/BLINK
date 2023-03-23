@@ -60,17 +60,19 @@ class BiEncoderModule(torch.nn.Module):
     ):
         embedding_ctxt = None
         cls_ctxt=None
+        embedding_late_interaction_ctxt = None
         if token_idx_ctxt is not None:
-            embedding_ctxt, cls_ctxt = self.context_encoder(
+            embedding_ctxt, cls_ctxt, embedding_late_interaction_ctxt = self.context_encoder(
                 token_idx_ctxt, segment_idx_ctxt, mask_ctxt
             )
         embedding_cands = None
         cls_cands=None
+        embedding_late_interaction_cands = None
         if token_idx_cands is not None:
-            embedding_cands, cls_cands = self.cand_encoder(
+            embedding_cands, cls_cands, embedding_late_interaction_cands = self.cand_encoder(
                 token_idx_cands, segment_idx_cands, mask_cands, data_type="candidate"
             )
-        return embedding_ctxt, embedding_cands, cls_ctxt, cls_cands
+        return embedding_ctxt, embedding_cands, cls_ctxt, cls_cands, embedding_late_interaction_ctxt, embedding_late_interaction_cands
 
 
 class BiEncoderRanker(torch.nn.Module):
@@ -148,10 +150,10 @@ class BiEncoderRanker(torch.nn.Module):
         token_idx_cands, segment_idx_cands, mask_cands = to_bert_input(
             cands, self.NULL_IDX
         )
-        _, embedding_cands, _, cls_cands = self.model(
+        _, embedding_cands, _, cls_cands, _, embedding_late_interaction = self.model(
             None, None, None, token_idx_cands, segment_idx_cands, mask_cands
         )
-        return embedding_cands.cpu().detach(), cls_cands.cpu().detach()
+        return embedding_cands.cpu().detach(), cls_cands.cpu().detach(), embedding_late_interaction.cpu().detach()
         # TODO: why do we need cpu here?
         # return embedding_cands
 
@@ -170,7 +172,7 @@ class BiEncoderRanker(torch.nn.Module):
         token_idx_ctxt, segment_idx_ctxt, mask_ctxt = to_bert_input(
             text_vecs, self.NULL_IDX
         )
-        embedding_ctxt, _, cls_ctxt, _ = self.model(
+        embedding_ctxt, _, cls_ctxt, _, embedding_late_interaction_ctxt, _ = self.model(
             token_idx_ctxt, segment_idx_ctxt, mask_ctxt, None, None, None
         )
 
@@ -178,15 +180,14 @@ class BiEncoderRanker(torch.nn.Module):
         # Directly return the score of context encoding and candidate encoding
         if cand_encs is not None:
             scores=cls_ctxt.mm(cls_cands.t()) 
-            return scores, embedding_ctxt
+            return scores, embedding_ctxt, embedding_late_interaction_ctxt
 
         # Train time. We compare with all elements of the batch
         token_idx_cands, segment_idx_cands, mask_cands = to_bert_input(
             cand_vecs, self.NULL_IDX
         )
-        print(token_idx_cands.size())
 
-        _, embedding_cands, _, cls_cands = self.model(
+        _, embedding_cands, _, cls_cands, _,  embedding_late_interaction_cands = self.model(
             None, None, None, token_idx_cands, segment_idx_cands, mask_cands
         )
 
@@ -204,7 +205,7 @@ class BiEncoderRanker(torch.nn.Module):
             embedding_cands = embedding_cands.unsqueeze(2)  # batchsize x embed_size x 2
             scores = torch.bmm(cls_ctxt, cls_cands)  # batchsize x 1 x 1
             scores = torch.squeeze(scores)
-        return scores, embedding_ctxt
+        return scores, embedding_ctxt, embedding_late_interaction_ctxt
 
     # label_input -- negatives provided
     # If label_input is None, train on in-batch negatives

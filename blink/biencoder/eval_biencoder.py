@@ -129,19 +129,22 @@ def encode_candidate(
         src = 0
         cand_encode_dict = {}
         cand_cls_dict={}
+        cand_encode_late_interaction_dict={}
         for src, cand_pool in candidate_pool.items():
             logger.info("Encoding candidate pool %s" % WORLDS[src])
-            cand_pool_encode, cand_pool_cls = encode_candidate(
+            cand_pool_encode, cand_pool_cls, cand_encode_late_interaction = encode_candidate(
                 reranker,
                 cand_pool,
                 encode_batch_size,
                 silent,
                 logger,
-                is_zeshel=False,
+                is_zeshel=False
             )
             cand_encode_dict[src] = cand_pool_encode
             cand_cls_dict[src]= cand_pool_cls
-        return cand_encode_dict, cand_cls_dict
+            cand_encode_late_interaction_dict[src]= cand_encode_late_interaction
+
+        return cand_encode_dict, cand_cls_dict, cand_encode_late_interaction
         
     reranker.model.eval()
     device = reranker.device
@@ -159,7 +162,7 @@ def encode_candidate(
     for step, batch in enumerate(iter_):
         cands = batch
         cands = cands.to(device)
-        cand_encode, cand_cls = reranker.encode_candidate(cands)
+        cand_encode, cand_cls, cand_encode_late_interaction = reranker.encode_candidate(cands)
         if cand_encode_list is None:
             cand_encode_list = cand_encode
         else:
@@ -168,7 +171,7 @@ def encode_candidate(
             cand_cls_list = cand_cls
         else:
             cand_cls_list = torch.cat((cand_cls_list, cand_cls), dim=0)
-    return cand_encode_list, cand_cls_list
+    return cand_encode_list, cand_cls_list, cand_encode_late_interaction
 
 
 def load_or_generate_candidate_pool(
@@ -235,6 +238,7 @@ def main(params):
     )       
     candidate_cls = None
     candidate_encoding = None
+    cand_encode_late_interaction = None
     if cand_encode_path is not None:
         # try to load candidate encoding from path
         # if success, avoid computing candidate encoding
@@ -242,11 +246,12 @@ def main(params):
             logger.info("Loading pre-generated candidate encode path.")
             candidate_encoding = torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+".pt")
             candidate_cls=torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+"_cls.pt")
+            cand_encode_late_interaction=torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+"_late_interaction.pt")
         except:
             logger.info("Loading failed. Generating candidate encoding.")
 
-    if candidate_encoding is None:
-        candidate_encoding, candidate_cls = encode_candidate(
+    if candidate_encoding is None or cand_encode_late_interaction is None:
+        candidate_encoding, candidate_cls, cand_encode_late_interaction = encode_candidate(
             reranker,
             candidate_pool,
             params["encode_batch_size"],
@@ -264,6 +269,7 @@ def main(params):
             os.makedirs(cand_encode_path, exist_ok = True)
             torch.save(candidate_encoding, cand_encode_path+"/cand_enc_"+params["mode"]+".pt")
             torch.save(candidate_cls, cand_encode_path+"/cand_enc_"+params["mode"]+"_cls.pt")
+            torch.save(cand_encode_late_interaction, cand_encode_path+"/cand_enc_"+params["mode"]+"_late_interaction.pt")
 
 
     test_samples = utils.read_dataset(params["mode"], params["data_path"])
@@ -300,8 +306,10 @@ def main(params):
             params["top_k"],
             params.get("zeshel", None),
             save_results,
-            params=params
+            params=params,
+            cand_encode_late_interaction=cand_encode_late_interaction
         )
+
 
         if save_results: 
             save_data_dir = os.path.join(

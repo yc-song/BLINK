@@ -21,6 +21,10 @@ models
 output
 */output/*
 
+#slurm_output
+slurm_output
+*/slurm_output/*
+
 ### JupyterNotebooks ###
 # gitignore template for Jupyter Notebooks
 # website: http://jupyter.org/

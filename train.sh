@@ -2,7 +2,7 @@
 
 #SBATCH --job-name=2
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:3
+#SBATCH --gres=gpu:4
 #SBATCH --time=0-12:00:00
 #SBATCH --mem=200000MB
 #SBATCH --cpus-per-task=8
@@ -15,7 +15,7 @@ conda activate
 conda activate blink
 PYTHONPATH=.
 # python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --act_fn=softplus --decoder=True --dim_red=768 --layers=4 --learning_rate=0.0001 --train_batch_size=256 --architecture mlp --binary_loss True --hard_negative True --sampling True
-python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --act_fn=softplus --decoder=True --dim_red=768 --layers=4 --learning_rate=0.0001 --train_batch_size=256 --architecture mlp --binary_loss True --hard_negative False --sampling True
+python blink/crossencoder/train_cross.py --train_batch_size=256 --act_fn=softplus --decoder=True --dim_red=768 --layers=2 --learning_rate=1e-3 --top_k=1000 --architecture mlp --sampling False --hard_negative False --binary_loss False --num_train_epochs 10000 --data_path=models/zeshel_test/top1000_candidates/ --eval_batch_size 32 --lowercase
 # python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --act_fn=softplus --decoder=True --dim_red=768 --layers=4 --learning_rate=0.0001 --train_batch_size=256 --architecture mlp --binary_loss False --hard_negative True --sampling True
 # python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --act_fn=softplus --decoder=True --dim_red=768 --layers=4 --learning_rate=0.0001 --train_batch_size=256 --architecture mlp --binary_loss False --hard_negative False --sampling True
 # python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --act_fn=softplus --decoder=True --dim_red=768 --layers=4 --learning_rate=0.0001 --train_batch_size=256 --architecture mlp --binary_loss True --sampling False

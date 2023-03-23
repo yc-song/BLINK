@@ -22,10 +22,11 @@ def get_topk_predictions(
     silent,
     logger,
     cand_cls_list,
-    top_k=10,
+    top_k=64,
     is_zeshel=False,
     save_predictions=False,
-    params=None
+    params=None,
+    cand_encode_late_interaction = None
 ):
     reranker.model.eval()
     device = reranker.device
@@ -42,9 +43,26 @@ def get_topk_predictions(
     nn_scores = []
     nn_idxs = []
     stats = {}
-    
+    if params["mode"] == "valid":
+        src_minus = 8
+    elif params["mode"] == "test":
+        src_minus = 12
+    else:
+        src_minus = 0
+            
     if is_zeshel:
         world_size = len(WORLDS)
+        cumulative_idx = [0]
+        # Stacking cand_encode_list and candidate_pool to one tensor
+        for i in range(len(cand_encode_list)):
+            if i == 0:
+                cand_encode_list_tensor = cand_encode_list[i+src_minus]
+                candidate_pool_tensor = candidate_pool[i+src_minus]
+            else:
+                cumulative_idx.append(cand_encode_list_tensor.shape[0])
+                cand_encode_list_tensor = torch.cat([cand_encode_list_tensor, cand_encode_list[i+src_minus]])
+                candidate_pool_tensor = torch.cat([candidate_pool_tensor, candidate_pool[i+src_minus]])
+        # World 0, 1, 2... have been concatenated in tensor [tensors of world 0, tensors of world 1, tensors of world 2, ...]
     else:
         # only one domain
         world_size = 1
@@ -53,12 +71,6 @@ def get_topk_predictions(
         cand_cls_list=[cand_cls_list]
         cand_cls_list=[cand_cls_list]
 
-    if params["mode"] == "valid":
-        src_minus = 8
-    elif params["mode"] == "test":
-        src_minus = 12
-    else:
-        src_minus = 0
     logger.info("World size : %d" % world_size)
 
     for i in range(world_size):
@@ -80,7 +92,7 @@ def get_topk_predictions(
             src = 0
         cand_encode_list[src] = cand_encode_list[src].to(device)
         cand_cls_list[src] = cand_cls_list[src].to(device)
-        scores, embedding_ctxt = reranker.score_candidate(
+        scores, embedding_ctxt, embedding_late_interaction_ctxt = reranker.score_candidate(
             context_input, 
             None, 
             cand_encs=cand_encode_list[src],
@@ -95,7 +107,7 @@ def get_topk_predictions(
             if srcs[i] != old_src:
                 src = srcs[i].item()
                 # not the same domain, need to re-do
-                new_scores, _ = reranker.score_candidate(
+                new_scores, _, _ = reranker.score_candidate(
                     context_input[[i]], 
                     None,
                     cand_encs=cand_encode_list[src].to(device),
@@ -103,7 +115,7 @@ def get_topk_predictions(
                 )
                 value, inds = new_scores.topk(top_k)
                 inds = inds[0]
-                value = values[0]
+                value = value[0]
             pointer = -1
             for j in range(top_k):
                 if inds[j].item() == label_ids[i].item():
@@ -138,19 +150,19 @@ def get_topk_predictions(
 
             if pointer == -1:
                 continue
-            cand_encode_list[srcs[i].item()] = cand_encode_list[srcs[i].item()].to(device)
 
-            if params["architecture"] == "mlp_with_bert":
-                candidate_pool[srcs[i].item()] = candidate_pool[srcs[i].item()].to(device)
                 # cur_candidates = candidate_pool[srcs[i].item()][inds]
             # else:
                 # cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
             
             if params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
                 nn_context.append(context_input[i].cpu().tolist())#(1024)
+            elif params["architecture"] == "mlp_with_som":
+                pass
             else:
                 nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
-            nn_idxs.append(inds.tolist())
+            
+            nn_idxs.append([x + cumulative_idx[srcs[i].item()-src_minus] for x in inds.tolist()])
             nn_scores.append(value.tolist())
             nn_labels.append(pointer)
             nn_worlds.append(srcs[i].item()-src_minus)
@@ -181,8 +193,11 @@ def get_topk_predictions(
         res.extend(stats[src])
 
     logger.info(res.output())
-
-    nn_context = torch.FloatTensor(nn_context) # (10000,1024)
+                
+    if params["architecture"] == "mlp_with_som":
+        nn_context = embedding_late_interaction_ctxt
+    else:
+        nn_context = torch.FloatTensor(nn_context) # (10000,1024)
     nn_labels = torch.LongTensor(nn_labels)
     nn_idxs = torch.LongTensor(nn_idxs)
     nn_scores = torch.FloatTensor(nn_scores)
@@ -193,15 +208,20 @@ def get_topk_predictions(
         'nn_scores': nn_scores,
         'indexes': nn_idxs
     }
+
     if params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
-        nn_data["candidate_vecs"] = list(candidate_pool.values())
+        nn_data["candidate_vecs"] = candidate_pool_tensor.to(device)
+    elif params["architecture"] == "mlp_with_som":
+        nn_data["candidate_vecs"] = cand_encode_late_interaction.to(device)
     else:
-        nn_data["candidate_vecs"] = list(cand_encode_list.values())
+        nn_data["candidate_vecs"] = cand_encode_list_tensor.to(device)
     # print("candidate", nn_data["candidate_vecs"])
-    print("context shape", nn_context.shape)
-    print("score shape", nn_scores.shape)
-    print("index shape", nn_idxs.shape)
-    print("labels", nn_labels.shape)
+    print("context shape", nn_data["context_vecs"].shape)
+    print("score shape", nn_data["nn_scores"].shape)
+    print("index shape", nn_data["indexes"].shape)
+    print("labels", nn_data["labels"].shape)
+    print("candidate", nn_data["candidate_vecs"].shape)
+
     if is_zeshel:
         nn_data["worlds"] = torch.LongTensor(nn_worlds)
     print("worlds", nn_data["worlds"].shape)

@@ -175,6 +175,12 @@ class BlinkParser(argparse.ArgumentParser):
             help="mlp, bert, roberta, special_token, raw_context_text, mlp_with_bert",
         )
         parser.add_argument(
+            "--late_interaction",
+            default=config["late_interaction"],
+            type=str2bool,
+            help="mlp, bert, roberta, special_token, raw_context_text, mlp_with_bert",
+        )
+        parser.add_argument(
             "--pull_from_layer", type=int, default=-1, help="Layers to pull from BERT",
         )
         parser.add_argument(
@@ -357,6 +363,12 @@ class BlinkParser(argparse.ArgumentParser):
             default=config["valid_size"],
             type=int,
             help="dataset size of dev set",
+        )
+        parser.add_argument(
+            "--test_size",
+            default=config["test_size"],
+            type=int,
+            help="dataset size of test set",
         )
         parser.add_argument(
             "--patience",

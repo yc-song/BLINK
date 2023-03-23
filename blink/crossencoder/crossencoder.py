@@ -34,6 +34,8 @@ from blink.common.ranker_base_cross import BertEncoder, get_model_obj
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import ENT_START_TAG, ENT_END_TAG, ENT_TITLE_TAG
 from blink.crossencoder.mlp import MlpModule, MlpModel
+from blink.biencoder.biencoder import BiEncoderModule, BiEncoderRanker
+
 def load_crossencoder(params):
     # Init model
     crossencoder = CrossEncoderRanker(params)
@@ -176,27 +178,29 @@ class CrossEncoderRanker(torch.nn.Module):
         # token_idx = token_idx * mask.long()
         return token_idx, segment_idx, mask
 
-class MlpwithBiEncoderModule(CrossEncoderModule):
+class MlpwithBiEncoderModule(BiEncoderModule):
     def __init__(self, params, tokenizer):
         super(MlpwithBiEncoderModule, self).__init__(params, tokenizer)
-        model_path = params["bert_model"]
-        candidate_encoder_model = BertModel.from_pretrained(model_path)
-        candidate_encoder_model.resize_token_embeddings(len(tokenizer))
-        self.mlpmodule = MlpModule(params)
-        self.candidate_encoder = BertEncoder(
-            candidate_encoder_model,
-            params["out_dim"],
-            layer_pulled=params["pull_from_layer"],
-            add_linear=params["add_linear"],
+        self.params = params
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
         )
-        self.candidate_config = self.candidate_encoder.bert_model.config    
     def forward(
         self, token_idx_ctxt, segment_idx_ctxt, mask_ctxt, token_idx_cands, segment_idx_cands, mask_cands
     ):
-        embedding_ctxt = self.encoder(token_idx_ctxt, segment_idx_ctxt, mask_ctxt)
-        embedding_cands = self.candidate_encoder(token_idx_cands, segment_idx_cands, mask_cands)
+        mlpmodule = MlpModule(self.params).to(self.device)
+        embedding_ctxt = None
+        if token_idx_ctxt is not None:
+            embedding_ctxt, _, _ = self.context_encoder(
+                token_idx_ctxt, segment_idx_ctxt, mask_ctxt
+            )
+        embedding_cands = None
+        if token_idx_cands is not None:
+            embedding_cands, _, _ = self.cand_encoder(
+                token_idx_cands, segment_idx_cands, mask_cands, data_type="candidate"
+            )
         mlp_input = torch.cat((embedding_ctxt.unsqueeze(dim = 1), embedding_cands.unsqueeze(dim = 1)), dim=1).unsqueeze(dim = 0)
-        output = self.mlpmodule(mlp_input)
+        output = mlpmodule(mlp_input)
         return output.squeeze(2).squeeze(0)
 
 class MlpwithBiEncoderRanker(CrossEncoderRanker): 
