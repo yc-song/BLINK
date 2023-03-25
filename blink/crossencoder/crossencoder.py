@@ -35,7 +35,8 @@ from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import ENT_START_TAG, ENT_END_TAG, ENT_TITLE_TAG
 from blink.crossencoder.mlp import MlpModule, MlpModel
 from blink.biencoder.biencoder import BiEncoderModule, BiEncoderRanker
-
+from blink.crossencoder.parallel import DataParallelModel, DataParallelCriterion
+from parallel import DataParallelModel, DataParallelCriterion
 def load_crossencoder(params):
     # Init model
     crossencoder = CrossEncoderRanker(params)
@@ -185,10 +186,10 @@ class MlpwithBiEncoderModule(BiEncoderModule):
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
         )
+    
     def forward(
         self, token_idx_ctxt, segment_idx_ctxt, mask_ctxt, token_idx_cands, segment_idx_cands, mask_cands
     ):
-        mlpmodule = MlpModule(self.params).to(self.device)
         embedding_ctxt = None
         if token_idx_ctxt is not None:
             embedding_ctxt, _, _ = self.context_encoder(
@@ -199,20 +200,26 @@ class MlpwithBiEncoderModule(BiEncoderModule):
             embedding_cands, _, _ = self.cand_encoder(
                 token_idx_cands, segment_idx_cands, mask_cands, data_type="candidate"
             )
-        mlp_input = torch.cat((embedding_ctxt.unsqueeze(dim = 1), embedding_cands.unsqueeze(dim = 1)), dim=1).unsqueeze(dim = 0)
-        output = mlpmodule(mlp_input)
-        return output.squeeze(2).squeeze(0)
+
+        return embedding_ctxt, embedding_cands
 
 class MlpwithBiEncoderRanker(CrossEncoderRanker): 
     def __init__(self, params, shared=None):
         super(MlpwithBiEncoderRanker, self).__init__(params)
         self.params = params
-
+        self.mlpmodule = MlpModule(self.params).to(self.device)
     def build_model(self):
         self.model = MlpwithBiEncoderModule(self.params, self.tokenizer)
-
+    def load_model(self, fname, cpu=False):
+        if cpu:
+            state_dict = torch.load(fname, map_location=lambda storage, location: "cpu")
+        else:
+            state_dict = torch.load(fname)
+        self.model.load_state_dict(state_dict, strict = False)
     def score_candidate(self, text_vecs, context_len):
         # Encode contexts first
+
+
         num_cand = text_vecs.size(1) # 64
         text_vecs_ctxt = text_vecs[:,:,0,:].squeeze(dim = 2)
         text_vecs_ctxt = text_vecs_ctxt.view(-1, text_vecs_ctxt.size(-1))
@@ -224,8 +231,46 @@ class MlpwithBiEncoderRanker(CrossEncoderRanker):
         token_idx_cands, segment_idx_cands, mask_cands = self.to_bert_input(
             text_vecs_cands.int(), self.NULL_IDX, context_len,
         )
-        embedding_ctxt = self.model(token_idx_ctxt, segment_idx_ctxt, mask_ctxt,token_idx_cands, segment_idx_cands, mask_cands)
-        return embedding_ctxt.view(-1, num_cand)
+        embedding_ctxt, embedding_cands = self.model(
+            token_idx_ctxt, segment_idx_ctxt, mask_ctxt, token_idx_cands, segment_idx_cands, mask_cands
+        )
+        score = self.mlpmodule(torch.cat((embedding_ctxt.unsqueeze(dim = 1), embedding_cands.unsqueeze(dim = 1)), dim=1).unsqueeze(dim = 0))
+        return score.view(-1, num_cand)
+        
+class MlpwithSOMModule(nn.Module):
+    def __init__(self, input_size):
+        super(MlpwithSOMModule, self).__init__()
+        self.input_size = input_size
+        self.mlpmodule = MlpModule(self.input_size)
+    def forward(self, context):
+        entity = context[:,:,1,:,:]
+        context = context[:,:,0,:,:] #(max_length, embedding_dimension)
+        entity = entity.reshape(-1, max_length, embedding_dimension)
+        context = context.reshape(-1, max_length, embedding_dimension)
+        # perform batch-wise dot product using torch.bmm
+        output = torch.bmm(context, entity.transpose(1,2)).squeeze().reshape(batch_size, top_k, max_length, max_length)
+        # reshape the output tensor to have shape (128, 128)
+        output = output.reshape(batch_size, top_k, max_length, max_length)
+        context = context.reshape(batch_size, top_k, max_length, embedding_dimension)
+
+        entity = entity.reshape(batch_size, top_k, max_length, embedding_dimension)
+        argmax_values = torch.argmax(output, dim=-1)
+        # print(entity[argmax_values].shape)
+        input = torch.stack([context, torch.gather(entity, dim =2, index = argmax_values.unsqueeze(-1).expand(-1,-1,-1,embedding_dimension))], dim = -2)
+
+        output = torch.sum(self.mlpmodule(input), -2)
+        return output.squeeze(-1)
+
+class MlpwithSOMRanker(CrossEncoderRanker): 
+    def __init__(self, params, shared=None):
+        super(MlpwithSOMRanker, self).__init__(params)
+    def build_model(self):
+        self.model = MlpwithSOMModule(self.params)
+    def forward(self, input, label_input, context_length):
+        scores = self.model(input)
+        loss = F.cross_entropy(scores, label_input)
+        return loss, scores
+
 
 class SpecialTokenBertModelwithSEPToken(BertModel):
     """
@@ -464,3 +509,5 @@ class RawTextBertModel(BertModel):
         outputs = (sequence_output, pooled_output,) + encoder_outputs[1:]  # add hidden_states and attentions if they are here
         
         return outputs  # sequence_output, pooled_output, (hidden_states), (attentions)
+
+# class MlpwithSOM()

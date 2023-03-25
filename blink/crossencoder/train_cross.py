@@ -26,7 +26,7 @@ from pytorch_transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from pytorch_transformers.optimization import WarmupLinearSchedule
 from pytorch_transformers.tokenization_bert import BertTokenizer
 import blink.candidate_retrieval.utils
-from blink.crossencoder.crossencoder import CrossEncoderRanker, load_crossencoder, MlpwithBiEncoderRanker
+from blink.crossencoder.crossencoder import CrossEncoderRanker, load_crossencoder, MlpwithBiEncoderRanker, MlpwithSOMRanker
 import logging
 import wandb
 import blink.candidate_ranking.utils as utils
@@ -35,6 +35,7 @@ from blink.biencoder.zeshel_utils import DOC_PATH, WORLDS, world_to_id
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import BlinkParser
 from blink.crossencoder.mlp import MlpModel
+import deepspeed
 # from pytorch_lightning.callbacks import EarlyStopping
 import matplotlib.pyplot as plt
 logger = None
@@ -44,6 +45,7 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
     # get values of candidates first
     candidate_input = candidate_input.to(device)
     candidate_input = candidate_input[idxs].squeeze(dim = 0).to(device)
+    print("0", candidate_input.shape)
     top_k=params["top_k"]
     ## context_input shape: (Size ,1024) e.g.  (10000, 1024)
     ## candidate_input shape: (Size, 65, 1024) e.g. (10000, 65, 1024)
@@ -65,12 +67,18 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
             # print(new_input.shape)
             # print(new_input.shape)
             return new_input
-    else:  
-        context_input=context_input.unsqueeze(dim=1).expand(-1,top_k,-1).to(device)
-        if params["architecture"]=="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert" or params["architecture"]=="baseline":
-            new_input=torch.stack((context_input,candidate_input),dim=2) # shape: (Size, 65, 2, 1024) e.g. (10000, 65, 2 , 1024)
-        elif params["architecture"]== "raw_context_text":
-            new_input=torch.cat((context_input,candidate_input),dim=2)
+    else: 
+        if params["architecture"] == "mlp_with_som":
+            context_input =  context_input.unsqueeze(dim=1).expand(-1,top_k,-1,-1).to(device)
+            context_input = torch.stack((context_input, candidate_input), dim = 2)
+            print("1", context_input.shape)
+            raise("error")
+        else:
+            context_input=context_input.unsqueeze(dim=1).expand(-1,top_k,-1).to(device)
+            if params["architecture"] =="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert" or params["architecture"]=="baseline":
+                new_input=torch.stack((context_input,candidate_input),dim=2) # shape: (Size, 65, 2, 1024) e.g. (10000, 65, 2 , 1024)
+            elif params["architecture"] == "raw_context_text":
+                new_input=torch.cat((context_input,candidate_input),dim=2)
         return new_input
         
 
@@ -234,6 +242,7 @@ def main(params):
     max_seq_length = params["max_seq_length"]
     context_length = params["max_context_length"]
     train_split = params["train_split"]
+    params["train_size"] = int(params["train_size"]/train_split)
     for i in range(train_split):
         if train_split == 1:
             fname = os.path.join(params["data_path"], "train_{}.t7".format(params["architecture"]))
@@ -252,35 +261,37 @@ def main(params):
                     fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp", i))
         if i == 0:
             train_data = torch.load(fname,  map_location=torch.device('cpu'))
+            # train_data = torch.load(fname)
             context_input = train_data["context_vecs"][:params["train_size"]]
             candidate_input_train = train_data["candidate_vecs"]
             idxs = train_data["indexes"][:params["train_size"]]
             label_input = train_data["labels"][:params["train_size"]]
             bi_encoder_score = train_data["nn_scores"][:params["train_size"]]
+            if params["zeshel"]:
+                src_input = train_data['worlds'][:params["train_size"]]
         else:
             # fname2 = os.path.join(params["data_path"], "train2.t7")
             train_data = torch.load(fname)
-
             context_input = torch.cat((context_input, train_data["context_vecs"][:params["train_size"]]), dim = 0)
-            # print("context shape:", context_input.shape)
-            # print("train context", context_input.shape) 
-            # print("candidate shape:", candidate_input.shape)
-            # print("candidate:", candidate_input)
             idxs = torch.cat((idxs, train_data["indexes"][:params["train_size"]]), dim = 0)
             label_input = torch.cat((label_input, train_data["labels"][:params["train_size"]]), dim = 0)
             bi_encoder_score = torch.cat((bi_encoder_score, train_data["nn_scores"][:params["train_size"]]), dim = 0)
+            if params["zeshel"]:
+                src_input = train_data['worlds'][:params["train_size"]]
     # Init model
     if params["architecture"]=="mlp":
         reranker= MlpModel(params)
     elif params["architecture"] == "mlp_with_bert":
         reranker = MlpwithBiEncoderRanker(params)
+    elif params["architecture"] == "mlp_with_som":
+        reranker = MlpwithSOMRanker(params)
     else:
         reranker = CrossEncoderRanker(params)
     tokenizer = reranker.tokenizer
     model = reranker.model
     if reranker.n_gpu > 0:
         torch.cuda.manual_seed_all(seed)
-    if params["architecture"] == "mlp" or params["architecture"] == "mlp_with_bert":
+    if params["architecture"] == "mlp":
         if params["optimizer"]=="Adam":
             optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
         elif params["optimizer"]=="AdamW":
@@ -293,7 +304,7 @@ def main(params):
         # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
         # scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
         # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=500, factor=0.9, min_lr=0.000001)
-    elif params["architecture"]=="special_token" or params["architecture"]=="raw_context_text" or params["architecture"] == "baseline" or params["architecture"] != "mlp_with_bert":
+    elif params["architecture"]=="special_token" or params["architecture"]=="raw_context_text" or params["architecture"] == "baseline" or params["architecture"] == "mlp_with_bert":
         optimizer = get_optimizer(model, params)
         # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
 
@@ -373,11 +384,15 @@ def main(params):
         context_input = context_input[:max_n]
         candidate_input = candidate_input[:max_n]
         label_input = label_input[:max_n]
-    if params["zeshel"]:
-        src_input = train_data['worlds'][:params["train_size"]]
-    if params["top_k"]<100:
+    if params["top_k"]<100 and params["architecture"] != "mlp_with_som":
         context_input = modify(context_input, candidate_input_train, params, src_input, idxs, mode = "train", wo64 = params["without_64"])
     if params["zeshel"]:
+        print(context_input.shape)
+        print(label_input.shape)
+        print(src_input.shape)
+        print(bi_encoder_score.shape)
+        print(idxs.shape)
+
         train_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, idxs)
         
     else:
@@ -419,19 +434,17 @@ def main(params):
             idxs = valid_data["indexes"][:params["valid_size"]]
             label_input = valid_data["labels"][:params["valid_size"]]
             bi_encoder_score = valid_data["nn_scores"][:params["valid_size"]]
-
+            if params["zeshel"]:
+                src_input = valid_data['worlds'][:params["valid_size"]]
         else:
             # fname2 = os.path.join(params["data_path"], "train2.t7")
             valid_data = torch.load(fname)
-
             context_input = torch.cat((context_input, valid_data["context_vecs"][:params["valid_size"]]), dim = 0)
-            # print("context shape:", context_input.shape)
-            # print("train context", context_input.shape) 
-            # print("candidate shape:", candidate_input.shape)
-            # print("candidate:", candidate_input)
             idxs = torch.cat((idxs, valid_data["indexes"][:params["valid_size"]]), dim = 0)
             label_input = torch.cat((label_input, valid_data["labels"][:params["valid_size"]]), dim = 0)
             bi_encoder_score = torch.cat((bi_encoder_score, valid_data["nn_scores"][:params["valid_size"]]), dim = 0)
+            if params["zeshel"]:
+                src_input = valid_data['worlds'][:params["valid_size"]]
     bi_val_mrr=torch.mean(1/(label_input+1)).item()
     bi_val_accuracy = torch.mean((label_input == 0).float()).item()
     bi_val_recall_4 = torch.mean((label_input <= 3).float()).item()
@@ -449,15 +462,10 @@ def main(params):
         label_input = label_input[:max_n]
     # print("valid context", context_input.shape)
     # print("valid candidate", candidate_input.shape)
-    if params["top_k"]<100:
+    if params["top_k"]<100 and params["architecture"] != "mlp_with_som":
         context_input = modify(context_input, candidate_input_valid, params, src_input, idxs, mode = "valid", wo64=params["without_64"])
     # print("valid modify", context_input.shape)
-    if params["zeshel"]:
-        src_input = valid_data["worlds"][:params["valid_size"]]
-        valid_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, idxs)
-
-    else:
-        valid_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, idxs)
+    valid_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, idxs)
     valid_sampler = SequentialSampler(valid_tensor_data)
 
     valid_dataloader = DataLoader(
@@ -466,17 +474,23 @@ def main(params):
         batch_size=params["eval_batch_size"]
     )
 
-    # evaluate before training
-    # results = evaluate(
-    #     reranker,
-    #     valid_dataloader,
-    #     device=device,
-    #     logger=logger,
-    #     context_length=context_length,
-    #     zeshel=params["zeshel"],
-    #     silent=params["silent"],
-    #     wo64=params["without_64"]
-    # )
+    #evaluate before training
+    logger.info("Evaluation on the development dataset")
+    val_acc=evaluate(
+        reranker,
+        valid_dataloader,
+        candidate_input = candidate_input_valid,
+        device=device,
+        logger=logger,
+        context_length=context_length,
+        zeshel=params["zeshel"],
+        silent=params["silent"],
+        train=False,
+        wo64=params["without_64"]
+    )
+    wandb.log({
+        "acc/val_acc": val_acc["normalized_accuracy"],
+        })
 
     number_of_samples_per_dataset = {}
 
@@ -547,7 +561,7 @@ def main(params):
             # print(batch[1].shape)
             context_input = batch[0] 
             label_input = batch[1]
-            if params["top_k"]>100:
+            if params["top_k"]>100 or params["architecture"] == "mlp_with_som":
                 world = batch[2]
                 idxs = batch[4]
                 context_input = modify(context_input, candidate_input_train, params, world, idxs, mode = "train", wo64 = params["without_64"])
@@ -558,7 +572,7 @@ def main(params):
                 loss, _ = reranker(context_input, label_input, context_length)
             # if n_gpu > 1:
             #     loss = loss.mean() # mean() to average on multi-gpu.
-
+            
             if grad_acc_steps > 1:
                 loss = loss / grad_acc_steps
 
@@ -580,6 +594,8 @@ def main(params):
                 "params/learning_rate":  optimizer.param_groups[0]['lr']
                 })
                 tr_loss = 0
+            a=list(reranker.parameters())[0].clone()
+
             loss.backward()
 
 
@@ -592,6 +608,9 @@ def main(params):
                 if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text" or params["architecture"]=="mlp_with_bert":
                     scheduler.step()
                 optimizer.zero_grad()
+            for i, param in enumerate(list(reranker.named_parameters())):
+                print(param)
+                print(list(reranker.parameters())[i].grad)
             save_interval=500
             if not step % save_interval and params["save"]:
                 logger.info("***** Saving fine - tuned model *****")
@@ -710,7 +729,8 @@ def main(params):
 
         best_score = ls[np.argmax(ls)]
         best_epoch_idx = li[np.argmax(ls)]
-
+        wandb.log({"acc/best_val_acc": best_score,
+        "acc/best_epoch_idx": best_epoch_idx})
 
         # if (step + 1) % grad_acc_steps == 0:
 

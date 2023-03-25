@@ -229,7 +229,9 @@ def main(params):
             batch = tuple(t.to(device) for t in batch)
             context_input, candidate_input, _, _ = batch
             loss, _ = reranker(context_input, candidate_input)
-
+            for i, param in enumerate(list(reranker.named_parameters())):
+                print(param)
+                print(list(reranker.parameters())[i].grad)
             # if n_gpu > 1:
             #     loss = loss.mean() # mean() to average on multi-gpu.
 

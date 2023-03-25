@@ -144,7 +144,7 @@ def encode_candidate(
             cand_cls_dict[src]= cand_pool_cls
             cand_encode_late_interaction_dict[src]= cand_encode_late_interaction
 
-        return cand_encode_dict, cand_cls_dict, cand_encode_late_interaction
+        return cand_encode_dict, cand_cls_dict, cand_encode_late_interaction_dict
         
     reranker.model.eval()
     device = reranker.device
@@ -152,6 +152,7 @@ def encode_candidate(
     data_loader = DataLoader(
         candidate_pool, sampler=sampler, batch_size=encode_batch_size
     )
+    
     if silent:
         iter_ = data_loader
     else:
@@ -159,6 +160,7 @@ def encode_candidate(
 
     cand_encode_list = None
     cand_cls_list = None
+    cand_encode_late_interaction_list = None
     for step, batch in enumerate(iter_):
         cands = batch
         cands = cands.to(device)
@@ -171,7 +173,12 @@ def encode_candidate(
             cand_cls_list = cand_cls
         else:
             cand_cls_list = torch.cat((cand_cls_list, cand_cls), dim=0)
-    return cand_encode_list, cand_cls_list, cand_encode_late_interaction
+        if cand_encode_late_interaction_list is None:
+            cand_encode_late_interaction_list = cand_encode_late_interaction
+        else:
+            cand_encode_late_interaction_list = torch.cat((cand_encode_late_interaction_list, cand_encode_late_interaction), dim = 0)
+
+    return cand_encode_list, cand_cls_list, cand_encode_late_interaction_list
 
 
 def load_or_generate_candidate_pool(
@@ -307,7 +314,8 @@ def main(params):
             params.get("zeshel", None),
             save_results,
             params=params,
-            cand_encode_late_interaction=cand_encode_late_interaction
+            cand_encode_late_interaction=cand_encode_late_interaction,
+            split = i
         )
 
 

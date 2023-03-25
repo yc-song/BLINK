@@ -172,7 +172,7 @@ class MlpModule(nn.Module):
         self.layers.append(nn.Linear(int(self.current_dim), 1))
 
     def forward(self, input):
-        input = torch.flatten(input, start_dim = 2)
+        input = torch.flatten(input, start_dim = -2)
         for i, layer in enumerate(self.layers[:-1]):
             input = self.act_fn(layer(self.dropout(input)))
         input = self.layers[-1](self.dropout(input))

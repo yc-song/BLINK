@@ -26,7 +26,8 @@ def get_topk_predictions(
     is_zeshel=False,
     save_predictions=False,
     params=None,
-    cand_encode_late_interaction = None
+    cand_encode_late_interaction = None,
+    split = 0
 ):
     reranker.model.eval()
     device = reranker.device
@@ -53,16 +54,13 @@ def get_topk_predictions(
     if is_zeshel:
         world_size = len(WORLDS)
         cumulative_idx = [0]
+        cand_encode_late_interaction_tensor = None
+        cand_encode_list_tensor = None
+        candidate_pool_tensor = None
         # Stacking cand_encode_list and candidate_pool to one tensor
-        for i in range(len(cand_encode_list)):
-            if i == 0:
-                cand_encode_list_tensor = cand_encode_list[i+src_minus]
-                candidate_pool_tensor = candidate_pool[i+src_minus]
-            else:
-                cumulative_idx.append(cand_encode_list_tensor.shape[0])
-                cand_encode_list_tensor = torch.cat([cand_encode_list_tensor, cand_encode_list[i+src_minus]])
-                candidate_pool_tensor = torch.cat([candidate_pool_tensor, candidate_pool[i+src_minus]])
-        # World 0, 1, 2... have been concatenated in tensor [tensors of world 0, tensors of world 1, tensors of world 2, ...]
+        for i in range(1, len(cand_encode_list)):
+            cumulative_idx.append(cumulative_idx[i-1]+cand_encode_list[i+src_minus].size(0))
+                # World 0, 1, 2... have been concatenated in tensor [tensors of world 0, tensors of world 1, tensors of world 2, ...]
     else:
         # only one domain
         world_size = 1
@@ -158,7 +156,11 @@ def get_topk_predictions(
             if params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
                 nn_context.append(context_input[i].cpu().tolist())#(1024)
             elif params["architecture"] == "mlp_with_som":
-                pass
+                nn_context.append(embedding_late_interaction_ctxt[i].cpu().tolist())#(1024)
+                # if type(nn_context) is list:
+                #     nn_context = embedding_late_interaction_ctxt
+                # else:
+                #     nn_context = torch.cat([nn_context, embedding_late_interaction_ctxt], dim=0)
             else:
                 nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
             
@@ -193,11 +195,7 @@ def get_topk_predictions(
         res.extend(stats[src])
 
     logger.info(res.output())
-                
-    if params["architecture"] == "mlp_with_som":
-        nn_context = embedding_late_interaction_ctxt
-    else:
-        nn_context = torch.FloatTensor(nn_context) # (10000,1024)
+    nn_context = torch.FloatTensor(nn_context) # (10000,1024)
     nn_labels = torch.LongTensor(nn_labels)
     nn_idxs = torch.LongTensor(nn_idxs)
     nn_scores = torch.FloatTensor(nn_scores)
@@ -208,19 +206,37 @@ def get_topk_predictions(
         'nn_scores': nn_scores,
         'indexes': nn_idxs
     }
-
-    if params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
-        nn_data["candidate_vecs"] = candidate_pool_tensor.to(device)
-    elif params["architecture"] == "mlp_with_som":
-        nn_data["candidate_vecs"] = cand_encode_late_interaction.to(device)
-    else:
-        nn_data["candidate_vecs"] = cand_encode_list_tensor.to(device)
     # print("candidate", nn_data["candidate_vecs"])
     print("context shape", nn_data["context_vecs"].shape)
     print("score shape", nn_data["nn_scores"].shape)
     print("index shape", nn_data["indexes"].shape)
     print("labels", nn_data["labels"].shape)
-    print("candidate", nn_data["candidate_vecs"].shape)
+    if split == 0:
+        if params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
+            for i in range(len(cand_encode_list)):
+                if i == 0:
+                    candidate_pool_tensor = candidate_pool[i+src_minus]
+                else:
+                    candidate_pool_tensor = torch.cat([candidate_pool_tensor, candidate_pool[i+src_minus]])
+
+            nn_data["candidate_vecs"] = candidate_pool_tensor.to(device)
+        elif params["architecture"] == "mlp_with_som":
+            for i in range(len(cand_encode_list)):
+                if i == 0:
+                    cand_encode_late_interaction_tensor = cand_encode_late_interaction[i+src_minus]
+                else:
+                    cand_encode_late_interaction_tensor = torch.cat([cand_encode_late_interaction_tensor, cand_encode_late_interaction[i+src_minus]], dim=0)            
+            nn_data["candidate_vecs"] = cand_encode_late_interaction_tensor
+        else:
+            for i in range(len(cand_encode_list)):
+                if i == 0:
+                    cand_encode_list_tensor = cand_encode_list[i+src_minus]
+                else:
+                    cand_encode_list_tensor = torch.cat([cand_encode_list_tensor, cand_encode_list[i+src_minus]])
+            nn_data["candidate_vecs"] = cand_encode_list_tensor.to(device)        
+
+        print("candidate", nn_data["candidate_vecs"].shape)
+
 
     if is_zeshel:
         nn_data["worlds"] = torch.LongTensor(nn_worlds)
