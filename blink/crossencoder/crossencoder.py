@@ -190,6 +190,7 @@ class MlpwithBiEncoderModule(BiEncoderModule):
     def forward(
         self, token_idx_ctxt, segment_idx_ctxt, mask_ctxt, token_idx_cands, segment_idx_cands, mask_cands
     ):
+        # Obtaining BERT embedding of context and candidate from bi-encoder
         embedding_ctxt = None
         if token_idx_ctxt is not None:
             embedding_ctxt, _, _ = self.context_encoder(
@@ -217,9 +218,7 @@ class MlpwithBiEncoderRanker(CrossEncoderRanker):
             state_dict = torch.load(fname)
         self.model.load_state_dict(state_dict, strict = False)
     def score_candidate(self, text_vecs, context_len):
-        # Encode contexts first
-
-
+        # Pre-processing input for MlpwithBiEncoderModule
         num_cand = text_vecs.size(1) # 64
         text_vecs_ctxt = text_vecs[:,:,0,:].squeeze(dim = 2)
         text_vecs_ctxt = text_vecs_ctxt.view(-1, text_vecs_ctxt.size(-1))
@@ -231,12 +230,14 @@ class MlpwithBiEncoderRanker(CrossEncoderRanker):
         token_idx_cands, segment_idx_cands, mask_cands = self.to_bert_input(
             text_vecs_cands.int(), self.NULL_IDX, context_len,
         )
+        # Get BERT embeddings
         embedding_ctxt, embedding_cands = self.model(
             token_idx_ctxt, segment_idx_ctxt, mask_ctxt, token_idx_cands, segment_idx_cands, mask_cands
         )
+        # Take them as input of MLP layers
         score = self.mlpmodule(torch.cat((embedding_ctxt.unsqueeze(dim = 1), embedding_cands.unsqueeze(dim = 1)), dim=1).unsqueeze(dim = 0))
         return score.view(-1, num_cand)
-        
+
 class MlpwithSOMModule(nn.Module):
     def __init__(self, input_size):
         super(MlpwithSOMModule, self).__init__()
