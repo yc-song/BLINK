@@ -59,7 +59,7 @@ def get_topk_predictions(
         candidate_pool_tensor = None
         # Stacking cand_encode_list and candidate_pool to one tensor
         for i in range(1, len(cand_encode_list)):
-            cumulative_idx.append(cumulative_idx[i-1]+cand_encode_list[i+src_minus].size(0))
+            cumulative_idx.append(cumulative_idx[i-1]+cand_encode_list[i-1+src_minus].size(0))
                 # World 0, 1, 2... have been concatenated in tensor [tensors of world 0, tensors of world 1, tensors of world 2, ...]
     else:
         # only one domain
@@ -163,7 +163,6 @@ def get_topk_predictions(
                 #     nn_context = torch.cat([nn_context, embedding_late_interaction_ctxt], dim=0)
             else:
                 nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
-            
             nn_idxs.append([x + cumulative_idx[srcs[i].item()-src_minus] for x in inds.tolist()])
             nn_scores.append(value.tolist())
             nn_labels.append(pointer)

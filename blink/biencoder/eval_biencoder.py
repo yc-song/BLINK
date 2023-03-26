@@ -253,11 +253,14 @@ def main(params):
             logger.info("Loading pre-generated candidate encode path.")
             candidate_encoding = torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+".pt")
             candidate_cls=torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+"_cls.pt")
-            cand_encode_late_interaction=torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+"_late_interaction.pt")
+            if params["architecture"] == "mlp_with_som":
+                cand_encode_late_interaction = torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+"_late_interaction.pt")
+            else:
+                cand_encode_late_interaction = None
         except:
             logger.info("Loading failed. Generating candidate encoding.")
 
-    if candidate_encoding is None or cand_encode_late_interaction is None:
+    if candidate_encoding is None or (cand_encode_late_interaction is None and params["architecture"] == "mlp_with_som"):
         candidate_encoding, candidate_cls, cand_encode_late_interaction = encode_candidate(
             reranker,
             candidate_pool,
@@ -267,6 +270,7 @@ def main(params):
             is_zeshel=params.get("zeshel", None)
             
         )
+
 
         if cand_encode_path is not None:
                 # Save candidate encoding to avoid re-compute

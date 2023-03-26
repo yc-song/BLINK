@@ -30,7 +30,7 @@ patterns_optimizer = {
         'encoder.layer.9.',
         'encoder.layer.8',
     ],
-    'all_encoder_layers': ['additional', 'bert_model.encoder.layer'],
+    'all_encoder_layers': ['additional', 'bert_model.encoder.layer', 'fc.weight', 'layers'],
     'all': ['additional', 'bert_model.encoder.layer', 'bert_model.embeddings'],
 }
 
@@ -59,9 +59,11 @@ def get_bert_optimizer(models, type_optimization, learning_rate, fp16=False):
                     parameters_with_decay_names.append(n)
 
     print('The following parameters will be optimized WITH decay:')
+
     print(ellipse(parameters_with_decay_names, 5, ' , '))
     print('The following parameters will be optimized WITHOUT decay:')
     print(ellipse(parameters_without_decay_names, 5, ' , '))
+    # print(parameters_without_decay_names)
 
     optimizer_grouped_parameters = [
         {'params': parameters_with_decay, 'weight_decay': 0.01},

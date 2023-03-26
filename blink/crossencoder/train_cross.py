@@ -43,9 +43,8 @@ logger = None
 def modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = True):
     device = torch.device('cuda')
     # get values of candidates first
-    candidate_input = candidate_input.to(device)
-    candidate_input = candidate_input[idxs].squeeze(dim = 0).to(device)
-    print("0", candidate_input.shape)
+    # candidate_input = candidate_input.to(device)
+    candidate_input = candidate_input[idxs.cpu()].squeeze(dim = 0).to(device)
     top_k=params["top_k"]
     ## context_input shape: (Size ,1024) e.g.  (10000, 1024)
     ## candidate_input shape: (Size, 65, 1024) e.g. (10000, 65, 1024)
@@ -70,9 +69,7 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
     else: 
         if params["architecture"] == "mlp_with_som":
             context_input =  context_input.unsqueeze(dim=1).expand(-1,top_k,-1,-1).to(device)
-            context_input = torch.stack((context_input, candidate_input), dim = 2)
-            print("1", context_input.shape)
-            raise("error")
+            new_input = torch.stack((context_input, candidate_input), dim = 2)
         else:
             context_input=context_input.unsqueeze(dim=1).expand(-1,top_k,-1).to(device)
             if params["architecture"] =="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert" or params["architecture"]=="baseline":
@@ -124,7 +121,7 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
         batch = tuple(t.to(device) for t in batch)
         context_input = batch[0]
         label_input = batch[1]
-        if params["top_k"]>100:
+        if params["top_k"]>100 or params["architecture"] == "mlp_with_som":
             world = batch[2]
             idxs = batch[4]
             context_input = modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = params["without_64"])
@@ -245,9 +242,9 @@ def main(params):
     params["train_size"] = int(params["train_size"]/train_split)
     for i in range(train_split):
         if train_split == 1:
-            fname = os.path.join(params["data_path"], "train_{}.t7".format(params["architecture"]))
+            fname = os.path.join(params["data_path"], "valid_{}.t7".format(params["architecture"]))
         else:
-            fname = os.path.join(params["data_path"], "train_{}_{}.t7".format(params["architecture"], i))
+            fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format(params["architecture"], i))
         if not os.path.isfile(fname):
             if params["architecture"] == "mlp":
                 if train_split == 1:
@@ -277,7 +274,7 @@ def main(params):
             label_input = torch.cat((label_input, train_data["labels"][:params["train_size"]]), dim = 0)
             bi_encoder_score = torch.cat((bi_encoder_score, train_data["nn_scores"][:params["train_size"]]), dim = 0)
             if params["zeshel"]:
-                src_input = train_data['worlds'][:params["train_size"]]
+                src_input = torch.cat((src_input, train_data['worlds'][:params["train_size"]]), dim = 0)
     # Init model
     if params["architecture"]=="mlp":
         reranker= MlpModel(params)
@@ -291,7 +288,7 @@ def main(params):
     model = reranker.model
     if reranker.n_gpu > 0:
         torch.cuda.manual_seed_all(seed)
-    if params["architecture"] == "mlp":
+    if params["architecture"] == "mlp" or params["architecture"] == "mlp_with_som":
         if params["optimizer"]=="Adam":
             optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
         elif params["optimizer"]=="AdamW":
@@ -387,12 +384,6 @@ def main(params):
     if params["top_k"]<100 and params["architecture"] != "mlp_with_som":
         context_input = modify(context_input, candidate_input_train, params, src_input, idxs, mode = "train", wo64 = params["without_64"])
     if params["zeshel"]:
-        print(context_input.shape)
-        print(label_input.shape)
-        print(src_input.shape)
-        print(bi_encoder_score.shape)
-        print(idxs.shape)
-
         train_tensor_data = TensorDataset(context_input, label_input, src_input, bi_encoder_score, idxs)
         
     else:
@@ -605,12 +596,13 @@ def main(params):
                     model.parameters(), params["max_grad_norm"]
                 )
                 optimizer.step()
+
                 if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text" or params["architecture"]=="mlp_with_bert":
                     scheduler.step()
                 optimizer.zero_grad()
-            for i, param in enumerate(list(reranker.named_parameters())):
-                print(param)
-                print(list(reranker.parameters())[i].grad)
+ #               for i, param in enumerate(list(reranker.named_parameters())):
+  #                  print(param)
+  #                  print(list(reranker.parameters())[i].grad)
             save_interval=500
             if not step % save_interval and params["save"]:
                 logger.info("***** Saving fine - tuned model *****")
@@ -670,7 +662,7 @@ def main(params):
             "params/epoch": epoch_idx
             })
             val_loss_sum = 0
-        if params["architecture"] != "raw_context_text" and params["architecture"] != "mlp_with_bert":
+        if params["architecture"] != "raw_context_text" and params["architecture"] != "mlp_with_bert" and params["train_size"]==-1:
             logger.info("Evaluation on the training dataset")
             train_acc=evaluate(
                 reranker,
