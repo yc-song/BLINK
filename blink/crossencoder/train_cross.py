@@ -239,7 +239,6 @@ def main(params):
     max_seq_length = params["max_seq_length"]
     context_length = params["max_context_length"]
     train_split = params["train_split"]
-    params["train_size"] = int(params["train_size"]/train_split)
     for i in range(train_split):
         if train_split == 1:
             fname = os.path.join(params["data_path"], "train_{}.t7".format(params["architecture"]))

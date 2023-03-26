@@ -14,5 +14,5 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate
 conda activate blink
 PYTHONPATH=.
-
-python blink/crossencoder/train_cross.py  --train_batch_size=4 --act_fn=softplus --train_size 100 --valid_size 5000 --decoder=True --dim_red=768 --layers=4 --learning_rate=1e-3 --top_k=64  --architecture mlp_with_som --sampling False --hard_negative False --binary_loss False --num_train_epochs 10 --data_path=models/zeshel_test/top64_candidates/ --eval_batch_size 32 --lowercase --train_split 2
+wandb enabled
+python blink/crossencoder/train_cross.py  --train_batch_size=32 --act_fn=softplus --decoder=True --dim_red=768 --layers=4 --learning_rate=1e-3 --top_k=64  --architecture mlp_with_som --sampling False --hard_negative False --binary_loss False --num_train_epochs 10 --data_path=models/zeshel_test/top64_candidates/ --eval_batch_size 128 --lowercase --train_split 5
