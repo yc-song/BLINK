@@ -242,9 +242,9 @@ def main(params):
     params["train_size"] = int(params["train_size"]/train_split)
     for i in range(train_split):
         if train_split == 1:
-            fname = os.path.join(params["data_path"], "valid_{}.t7".format(params["architecture"]))
+            fname = os.path.join(params["data_path"], "train_{}.t7".format(params["architecture"]))
         else:
-            fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format(params["architecture"], i))
+            fname = os.path.join(params["data_path"], "train_{}_{}.t7".format(params["architecture"], i))
         if not os.path.isfile(fname):
             if params["architecture"] == "mlp":
                 if train_split == 1:
