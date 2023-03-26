@@ -662,7 +662,7 @@ def main(params):
             "params/epoch": epoch_idx
             })
             val_loss_sum = 0
-        if params["architecture"] != "raw_context_text" and params["architecture"] != "mlp_with_bert" and params["train_size"]==-1:
+        if params["architecture"] != "raw_context_text" and params["architecture"] != "mlp_with_bert":
             logger.info("Evaluation on the training dataset")
             train_acc=evaluate(
                 reranker,
@@ -681,7 +681,25 @@ def main(params):
             "recall/train_recall":train_acc["recall"],
             "params/epoch": epoch_idx
             })
-                
+        elif params["train_size"] != -1:
+            logger.info("Evaluation on the training dataset")
+            train_acc=evaluate(
+                reranker,
+                train_dataloader,
+                candidate_input = candidate_input_train,
+                device=device,
+                logger=logger,
+                context_length=context_length,
+                zeshel=params["zeshel"],
+                silent=params["silent"],
+                wo64=params["without_64"]
+            )
+            wandb.log({
+            "acc/train_acc": train_acc["normalized_accuracy"],
+            'mrr/train_mrr':train_acc["mrr"],
+            "recall/train_recall":train_acc["recall"],
+            "params/epoch": epoch_idx
+            })
         logger.info("Evaluation on the development dataset")
         val_acc=evaluate(
             reranker,
