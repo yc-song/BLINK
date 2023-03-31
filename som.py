@@ -47,19 +47,29 @@ class MlpwithSOMModule(nn.Module):
         entity = entity.reshape(batch_size, top_k, max_length, embedding_dimension)
         argmax_values = torch.argmax(output, dim=-1)
         # print(entity[argmax_values].shape)
-        input = torch.stack([context, torch.gather(entity, dim =2, index = argmax_values.unsqueeze(-1).expand(-1,-1,-1,embedding_dimension))], dim = -2)
+        print("context", context, context.shape)
+        print("entity", entity, entity.shape)
+        entity = torch.gather(entity, dim =2, index = argmax_values.unsqueeze(-1).expand(-1,-1,-1,embedding_dimension))
+        print("max entity", entity)
+        entity = entity.reshape(-1, embedding_dimension)
+        context = context.reshape(-1, embedding_dimension)
+        
+        output = torch.bmm(context.unsqueeze(dim = -2), entity.unsqueeze(dim = -1))
+        output = output.reshape(batch_size, top_k, max_length)
+        print("output", output, output.shape)
+        output = torch.sum(output, -1)
+        print("output", output, output.shape)
 
-        output = torch.sum(self.mlpmodule(input), -2)
-        return output.squeeze(-1)
+        return output
 device = torch.device('cuda')
 
-batch_size = 16
-top_k = 64
-max_length = 128
-embedding_dimension = 768
+batch_size = 2
+top_k = 3
+max_length = 4
+embedding_dimension = 5
 ### modify ###
-context = torch.rand(batch_size, max_length, embedding_dimension)
-entity = torch.rand(batch_size, top_k, max_length, embedding_dimension)
+context = torch.randint(2,(batch_size, max_length, embedding_dimension))
+entity = torch.randint(2, (batch_size, top_k, max_length, embedding_dimension))
 context = context.unsqueeze(1).expand(-1, top_k, -1, -1)
 context = torch.stack((context, entity), dim = 2)   
 mlpmodule = MlpwithSOMModule(1536)

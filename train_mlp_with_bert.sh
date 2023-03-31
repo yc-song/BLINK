@@ -15,4 +15,4 @@ conda activate
 conda activate blink
 PYTHONPATH=.
 wandb enabled
-python blink/crossencoder/train_cross.py  --train_batch_size=4 --act_fn=softplus --train_size 10000 --valid_size 5000 --decoder=True --dim_red=768 --layers=4 --learning_rate=1e-5 --top_k=64  --architecture mlp_with_bert --sampling False --hard_negative False --binary_loss False --num_train_epochs 20 --data_path=models/zeshel_test/top64_candidates/ --path_to_model /home/jongsong/BLINK/models/zeshel/biencoder/pytorch_model.bin --eval_batch_size 32 --lowercase
+python blink/crossencoder/train_cross.py --train_batch_size=2 --act_fn=softplus --train_size 10000 --valid_size 5000 --decoder=True --dim_red=768 --layers=4 --learning_rate=1e-3 --top_k=64 --architecture mlp_with_bert --sampling False --hard_negative False --binary_loss False --num_train_epochs 20 --data_path=models/zeshel_test/top64_candidates/ --path_to_model /home/jongsong/BLINK/models/zeshel/biencoder/pytorch_model.bin --eval_batch_size 32 --lowercase --train_split 1 --resume=True --run_id=287ws5lh

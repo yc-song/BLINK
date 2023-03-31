@@ -28,6 +28,9 @@ class BertEncoder(nn.Module):
         output_bert, output_pooler = self.bert_model(
             token_ids, segment_ids, attention_mask
         )
+        print(self.bert_model(
+            token_ids, segment_ids, attention_mask
+        )[2])
         # get embedding of [CLS] token
         if self.additional_linear is not None:
             embeddings = output_pooler

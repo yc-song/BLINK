@@ -275,8 +275,48 @@ class MlpwithSOMRanker(CrossEncoderRanker):
         scores = self.model(input)
         loss = F.cross_entropy(scores, label_input)
         return loss, scores
+class SOMModule(nn.Module):
+    def __init__(self):
+        super(SOMModule, self).__init__()
+    def forward(self, context):
+        batch_size = context.size(0)
+        top_k = context.size(1)
+        max_length = context.size(3)
+        embedding_dimension = context.size(4)
 
+        entity = context[:,:,1,:,:]
+        context = context[:,:,0,:,:] #(max_length, embedding_dimension)
 
+        entity = entity.reshape(-1, max_length, embedding_dimension)
+        context = context.reshape(-1, max_length, embedding_dimension)
+        # perform batch-wise dot product using torch.bmm
+        output = torch.bmm(context, entity.transpose(1,2)).squeeze().reshape(batch_size, top_k, max_length, max_length)
+        # reshape the output tensor to have shape (128, 128)
+        output = output.reshape(batch_size, top_k, max_length, max_length)
+        context = context.reshape(batch_size, top_k, max_length, embedding_dimension)
+
+        entity = entity.reshape(batch_size, top_k, max_length, embedding_dimension)
+        argmax_values = torch.argmax(output, dim=-1)
+        # print(entity[argmax_values].shape)
+        entity = torch.gather(entity, dim =2, index = argmax_values.unsqueeze(-1).expand(-1,-1,-1,embedding_dimension))
+        entity = entity.reshape(-1, embedding_dimension)
+        context = context.reshape(-1, embedding_dimension)
+        
+        output = torch.bmm(context.unsqueeze(dim = -2), entity.unsqueeze(dim = -1))
+        output = output.reshape(batch_size, top_k, max_length)
+        output = torch.sum(output, -1)
+
+        return output
+
+class SOMRanker(CrossEncoderRanker): 
+    def __init__(self, params, shared=None):
+        super(SOMRanker, self).__init__(params)
+    def build_model(self):
+        self.model = SOMModule()
+    def forward(self, input, label_input, context_length, evaluate = False):
+        scores = self.model(input)
+        loss = F.cross_entropy(scores, label_input)
+        return loss, scores
 class SpecialTokenBertModelwithSEPToken(BertModel):
     """
     Outputs: `Tuple` comprising various elements depending on the configuration (config) and inputs:

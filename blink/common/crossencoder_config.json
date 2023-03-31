@@ -1,7 +1,7 @@
 
 {
 "bert_model": "bert-base-cased",
-"data_path": "models/zeshel/top64_candidates/",
+"data_path": "models/zeshel_test/top64_candidates/",
 "learning_rate": 1e-04,
 "num_train_epochs":10000,
 "max_context_length": 128,
@@ -39,7 +39,7 @@
 "sampling": false,
 "num_samples": 32,
 "split": 1,
-"train_split": 1,
+"train_split": 5,
 "valid_split": 1,
 "test_split": 1,
 "late_interaction": false
