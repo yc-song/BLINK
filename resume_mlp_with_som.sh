@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=mlp-with-som-resume
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:3
 #SBATCH --nodes=1
 #SBATCH --time=0-12:00:00
 #SBATCH --output=/home/jongsong/BLINK/slurm_output/bert/%j.out
