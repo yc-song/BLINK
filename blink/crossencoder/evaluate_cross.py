@@ -44,8 +44,6 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
     device = torch.device('cuda')
     # get values of candidates first
     # candidate_input = candidate_input.to(device)
-    print(idxs.shape)
-    print(candidate_input.shape)
     candidate_input = candidate_input[idxs.cpu()].to(device)
     top_k=params["top_k"]
     ## context_input shape: (Size ,1024) e.g.  (10000, 1024)
