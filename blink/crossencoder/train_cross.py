@@ -72,9 +72,9 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
             new_input = torch.stack((context_input, candidate_input), dim = 2)
         else:
             context_input=context_input.unsqueeze(dim=1).expand(-1,top_k,-1).to(device)
-            if params["architecture"] =="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert" or params["architecture"]=="baseline":
+            if params["architecture"] =="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert":
                 new_input=torch.stack((context_input,candidate_input),dim=2) # shape: (Size, 65, 2, 1024) e.g. (10000, 65, 2 , 1024)
-            elif params["architecture"] == "raw_context_text":
+            elif params["architecture"] == "raw_context_text" or params["architecture"]=="baseline":
                 new_input=torch.cat((context_input,candidate_input),dim=2)
         return new_input
         
@@ -288,6 +288,8 @@ def main(params):
         reranker = MlpwithSOMRanker(params)
     elif params["architecture"] == "som":
         reranker = SOMRanker(params)
+    elif params["architecture"] == "baseline":
+        reranker = CrossEncoderRanker(params)
     else:
         reranker = CrossEncoderRanker(params)
     tokenizer = reranker.tokenizer
@@ -428,6 +430,11 @@ def main(params):
                     fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp_with_som"))
                 else:
                     fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp_with_som", i))
+            elif params["architecture"] == "baseline":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp_with_bert"))
+                else:
+                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp_with_bert", i))
 
         if i == 0:
             valid_data = torch.load(fname)
@@ -532,7 +539,6 @@ def main(params):
     for epoch_idx in trange(epoch_idx_global, int(num_train_epochs), desc="Epoch"):
         model.train()
 
-        print("optimizer:", optimizer)
 
         tr_loss = 0
         val_acc=0
@@ -597,7 +603,6 @@ def main(params):
                 "params/learning_rate":  optimizer.param_groups[0]['lr']
                 })
                 tr_loss = 0
-            a=list(reranker.parameters())[0].clone()
 
             loss.backward()
 
@@ -630,20 +635,25 @@ def main(params):
                 }, epoch_output_folder_path)
                 folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"],run.id)
 
-                each_file_path_and_gen_time = []
-
-                for each_file_name in os.listdir(folder_path):
-                    each_file_path = folder_path + each_file_name
-                    each_file_gen_time = os.path.getctime(each_file_path)
-                    each_file_path_and_gen_time.append(
-                        (each_file_path, each_file_gen_time)
-                    )
-                most_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[0]
-                second_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[1]
-                for each_file_name in os.listdir(folder_path):
-                    each_file_path = folder_path + each_file_name
-                    if (each_file_path != most_recent_file and each_file_path != second_recent_file) and each_file_name[0]=="e":
-                        os.remove(each_file_path)
+                # each_file_path_and_gen_time = []
+                for filename in sorted(os.listdir(folder_path))[:-5]:
+                    filename_relPath = os.path.join(folder_path,filename)
+                    print(filename_relPath)
+                    os.remove(filename_relPath)
+                # for each_file_name in os.listdir(folder_path):
+                #     each_file_path = folder_path + each_file_name
+                #     each_file_gen_time = os.path.getctime(each_file_path)
+                #     each_file_path_and_gen_time.append(
+                #         (each_file_path, each_file_gen_time)
+                #     )
+                # print(each_file_gen_time)
+                # most_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[0]
+                # second_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[0]
+                # print(most_recent_file, second_recent_file)
+                # for each_file_name in os.listdir(folder_path):
+                #     each_file_path = folder_path + each_file_name
+                #     if (each_file_path != most_recent_file and each_file_path != second_recent_file) and each_file_name[0]=="e":
+                #         os.remove(each_file_path)
 
         # utils.save_model(model, tokenizer, epoch_output_folder_path)
 

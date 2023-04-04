@@ -1,9 +1,9 @@
 #!/bin/bash
 
-#SBATCH --job-name=som
+#SBATCH --job-name=mlp-with-som
 #SBATCH --nodes=1
 #SBATCH --time=0-12:00:00
-#SBATCH --mem=320000MB
+#SBATCH --mem=240000MB
 #SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-node=2
 #SBATCH --partition=P1
@@ -16,5 +16,7 @@ conda activate
 conda activate blink
 
 PYTHONPATH=.
+wandb enabled
+wandb online
 wandb agent jongsong/mlp-with-som/ves3748u --count 1
 sbatch train_sweep_mlp_with_som.sh

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=mlp-with-som-resume
+#SBATCH --job-name=som-resume
 #SBATCH --gres=gpu:3
 #SBATCH --nodes=1
 #SBATCH --time=0-12:00:00
@@ -18,9 +18,10 @@ PYTHONPATH=.
 # num_train_epochs=`grep -o '"num_train_epochs": [^,]*' ./models/zeshel/crossencoder/mlp_with_som/$1/training_params/training_params.json | grep -o '[^ ]*$'`
 
 # echo "lr=${lr}"
-python_output=$(python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --architecture=mlp_with_som --decoder=False --dim_red=768 --layers=4 --learning_rate=0.00046488765457263783 --num_train_epochs=40 --train_batch_size=8 --resume=True --run_id=$1 --wandb=mlp-with-som)
-echo $python_output
-time_out=$(echo "$python_output" | grep -E "time_out")
+wandb enabled
+wandb online
+python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --architecture=mlp_with_som --decoder=True --dim_red=768 --layers=4 --learning_rate=0.0009772310836350677 --num_train_epochs=80 --train_batch_size=20 --resume=True --run_id=tilpiwym --wandb=mlp-with-som                                             
+# python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --architecture=mlp_with_som --decoder=True --dim_red=1536 --layers=2 --learning_rate=0.00011235861209414792 --num_train_epochs=50 --train_batch_size=8 --resume=True --run_id=9xh6r1v8 --wandb=mlp-with-som
 # if [ "$time_out" = "time_out" ]; then
 #   echo "timeout"
 #   sbatch resume_raw_bert.sh $1

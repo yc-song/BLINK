@@ -31,6 +31,8 @@ from pytorch_transformers.tokenization_bert import BertTokenizer
 from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 
 from blink.common.ranker_base_cross import BertEncoder, get_model_obj
+from blink.common.ranker_base import BertEncoder as BertEncoder_baseline
+
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import ENT_START_TAG, ENT_END_TAG, ENT_TITLE_TAG
 from blink.crossencoder.mlp import MlpModule, MlpModel
@@ -56,13 +58,23 @@ class CrossEncoderModule(torch.nn.Module):
         elif params["architecture"] == "baseline" or params["architecture"] == "mlp_with_bert":
             encoder_model = BertModel.from_pretrained(model_path)
         encoder_model.resize_token_embeddings(len(tokenizer))
-        self.encoder = BertEncoder(
-            encoder_model,
-            params["out_dim"],
-            layer_pulled=params["pull_from_layer"],
-            add_linear=params["add_linear"],
-        )
-        self.config = self.encoder.bert_model.config
+        if params["architecture"] == "baseline":
+            self.encoder = BertEncoder_baseline(
+                encoder_model,
+                params["out_dim"],
+                layer_pulled=params["pull_from_layer"],
+                add_linear=params["add_linear"],
+            )
+            self.config = self.encoder.bert_model.config
+
+        else:
+            self.encoder = BertEncoder(
+                encoder_model,
+                params["out_dim"],
+                layer_pulled=params["pull_from_layer"],
+                add_linear=params["add_linear"],
+            )
+            self.config = self.encoder.bert_model.config
 
     def forward(
         self, token_idx_ctxt, segment_idx_ctxt, mask_ctxt,
@@ -157,6 +169,9 @@ class CrossEncoderRanker(torch.nn.Module):
 
     def forward(self, input_idx, label_input, context_len, evaluate = False):
         scores = self.score_candidate(input_idx, context_len)
+        # print(input_idx.shape)
+        # print(scores.shape)
+        # print(label_input.shape)
         loss = F.cross_entropy(scores, label_input, reduction="mean")
         return loss, scores
 
@@ -189,17 +204,17 @@ class MlpwithBiEncoderModule(BiEncoderModule):
         self.mlpmodule = MlpModule(self.params).to(self.device)
     
     def forward(
-        self, token_idx_ctxt, segment_idx_ctxt, mask_ctxt, token_idx_cands, segment_idx_cands, mask_cands
+        self, token_idx_ctxt, segment_idx_ctxt, mask_ctxt, token_idx_cands, segment_idx_cands, mask_cands, num_cand
     ):
         # Obtaining BERT embedding of context and candidate from bi-encoder
         embedding_ctxt = None
         if token_idx_ctxt is not None:
-            embedding_ctxt, _, _ = self.context_encoder(
+            embedding_ctxt, cls_ctxt, _ = self.context_encoder(
                 token_idx_ctxt, segment_idx_ctxt, mask_ctxt
             )
         embedding_cands = None
         if token_idx_cands is not None:
-            embedding_cands, _, _ = self.cand_encoder(
+            embedding_cands, cls_cands, _ = self.cand_encoder(
                 token_idx_cands, segment_idx_cands, mask_cands, data_type="candidate"
             )
         score = self.mlpmodule(torch.cat((embedding_ctxt.unsqueeze(dim = 1), embedding_cands.unsqueeze(dim = 1)), dim=1).unsqueeze(dim = 0))
@@ -222,6 +237,7 @@ class MlpwithBiEncoderRanker(CrossEncoderRanker):
         # Pre-processing input for MlpwithBiEncoderModule
         num_cand = text_vecs.size(1) # 64
         text_vecs_ctxt = text_vecs[:,:,0,:].squeeze(dim = 2)
+        batch_size = text_vecs_ctxt.size(0)
         text_vecs_ctxt = text_vecs_ctxt.view(-1, text_vecs_ctxt.size(-1))
         text_vecs_cands = text_vecs[:,:,1,:].squeeze(dim = 2)
         text_vecs_cands = text_vecs_cands.view(-1, text_vecs_cands.size(-1))
@@ -233,7 +249,7 @@ class MlpwithBiEncoderRanker(CrossEncoderRanker):
         )
         # Get BERT embeddings
         score = self.model(
-            token_idx_ctxt, segment_idx_ctxt, mask_ctxt, token_idx_cands, segment_idx_cands, mask_cands
+            token_idx_ctxt, segment_idx_ctxt, mask_ctxt, token_idx_cands, segment_idx_cands, mask_cands, num_cand 
         )
         # Take them as input of MLP layers
         return score.view(-1, num_cand)

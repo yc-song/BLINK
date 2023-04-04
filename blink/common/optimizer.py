@@ -76,8 +76,8 @@ def get_bert_optimizer(models, type_optimization, learning_rate, fp16=False):
     # print(parameters_without_decay_names)
 
     optimizer_grouped_parameters = [
-        {'params': parameters_with_decay, 'weight_decay': 0.01, 'lr': 1e-5},
-        {'params': parameters_without_decay, 'weight_decay': 0.0, 'lr': 1e-5},
+        {'params': parameters_with_decay, 'weight_decay': 0.01, 'lr': 2e-5},
+        {'params': parameters_without_decay, 'weight_decay': 0.0, 'lr': 2e-5},
         {'params': parameters_mlp, 'weight_decay': 0.01}
     ]
     optimizer = AdamW(
