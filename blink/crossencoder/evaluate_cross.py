@@ -121,7 +121,7 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
         batch = tuple(t.to(device) for t in batch)
         context_input = batch[0]
         label_input = batch[1]
-        if params["top_k"]>100 or params["architecture"] == "mlp_with_som" or params["architecture"] == "som":
+        if params["top_k"]>50 or params["architecture"] == "mlp_with_som" or params["architecture"] == "som":
             world = batch[2]
             idxs = batch[3]
             context_input = modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = params["without_64"])
@@ -329,7 +329,7 @@ def main(params):
         context_input = context_input[:max_n]
         candidate_input = candidate_input[:max_n]
         label_input = label_input[:max_n]
-    if params["top_k"]<100 and params["architecture"] != "mlp_with_som" and params["architecture"] != "som":
+    if params["top_k"]<50 and params["architecture"] != "mlp_with_som" and params["architecture"] != "som":
         context_input = modify(context_input, candidate_input_train, params, src_input, idxs, mode = "train", wo64 = params["without_64"])
     if params["zeshel"]:
         train_tensor_data = TensorDataset(context_input, label_input, src_input, idxs, bi_encoder_score)
@@ -385,6 +385,7 @@ def main(params):
             bi_encoder_score = torch.cat((bi_encoder_score, valid_data["nn_scores"][:params["valid_size"]]), dim = 0)
             if params["zeshel"]:
                 src_input = valid_data['worlds'][:params["valid_size"]]
+
     bi_val_mrr=torch.mean(1/(label_input+1)).item()
     bi_val_accuracy = torch.mean((label_input == 0).float()).item()
     bi_val_recall_4 = torch.mean((label_input <= 3).float()).item()
@@ -401,8 +402,8 @@ def main(params):
         candidate_input = candidate_input[:max_n]
         label_input = label_input[:max_n]
     # print("valid context", context_input.shape)
-    # print("valid candidate", candidate_input.shape)
-    if params["top_k"]<100 and params["architecture"] != "mlp_with_som" and params["architecture"] != "som":
+
+    if params["top_k"]<50 and params["architecture"] != "mlp_with_som" and params["architecture"] != "som":
         context_input = modify(context_input, candidate_input_valid, params, src_input, idxs, mode = "valid", wo64=params["without_64"])
     # print("valid modify", context_input.shape)
     valid_tensor_data = TensorDataset(context_input, label_input, src_input, idxs)
@@ -551,7 +552,7 @@ def main(params):
         label_input = label_input[:max_n]
     if params["zeshel"]:
         src_input = test_data['worlds'][:params["test_size"]]
-    if params["top_k"]<100 and params["architecture"] != "mlp_with_som" and params["architecture"] != "som":
+    if params["top_k"]<50 and params["architecture"] != "mlp_with_som" and params["architecture"] != "som":
         context_input = modify(context_input, candidate_input_test, params, src_input, idxs, mode = "test", wo64 = params["without_64"])
     if params["zeshel"]:
         test_tensor_data = TensorDataset(context_input, label_input, src_input, idxs)

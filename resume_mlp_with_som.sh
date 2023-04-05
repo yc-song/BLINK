@@ -20,7 +20,7 @@ PYTHONPATH=.
 # echo "lr=${lr}"
 wandb enabled
 wandb online
-python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --architecture=mlp_with_som --decoder=True --dim_red=768 --layers=4 --learning_rate=0.0009772310836350677 --num_train_epochs=80 --train_batch_size=20 --resume=True --run_id=tilpiwym --wandb=mlp-with-som                                             
+python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --architecture=mlp_with_som --decoder=False --dim_red=768 --layers=4 --learning_rate=0.001576608022167138 --num_train_epochs=20 --train_batch_size=8 --train_size 10 --valid_size 10 --resume=True --run_id=j9j83kwc                             
 # python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --architecture=mlp_with_som --decoder=True --dim_red=1536 --layers=2 --learning_rate=0.00011235861209414792 --num_train_epochs=50 --train_batch_size=8 --resume=True --run_id=9xh6r1v8 --wandb=mlp-with-som
 # if [ "$time_out" = "time_out" ]; then
 #   echo "timeout"

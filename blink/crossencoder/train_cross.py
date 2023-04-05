@@ -39,6 +39,30 @@ import deepspeed
 # from pytorch_lightning.callbacks import EarlyStopping
 import matplotlib.pyplot as plt
 logger = None
+scheduler_architecture = [
+    "mlp_with_bert",
+    "baseline",
+    "raw_context_text",
+    "special_token",
+    "som"
+]
+# Below are architectures which causes OOM issue when function modify() is not called appropraitely
+oom_architecture= [
+    "mlp_with_som",
+    "som",
+    "mlp"
+]
+# mlp_based_architecture and BERT_bsaed_architecture use different optimizer call
+mlp_based_architecture = [
+    "mlp",
+    "mlp_with_som"
+]
+bert_based_architecture = [
+    "mlp_with_bert",
+    "raw_context_text",
+    "special_token",
+    "baseline"
+]
 
 def modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = True):
     device = torch.device('cuda')
@@ -121,7 +145,7 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
         batch = tuple(t.to(device) for t in batch)
         context_input = batch[0]
         label_input = batch[1]
-        if params["top_k"]>100 or params["architecture"] == "mlp_with_som" or params["architecture"] == "som":
+        if params["top_k"]>100 or params["architecture"] in oom_architecture:
             world = batch[2]
             idxs = batch[3]
             context_input = modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = params["without_64"])
@@ -296,7 +320,7 @@ def main(params):
     model = reranker.model
     if reranker.n_gpu > 0:
         torch.cuda.manual_seed_all(seed)
-    if params["architecture"] == "mlp" or params["architecture"] == "mlp_with_som" or params["architecture"] == "som":
+    if params["architecture"] in mlp_based_architecture:
         if params["optimizer"]=="Adam":
             optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
         elif params["optimizer"]=="AdamW":
@@ -309,7 +333,7 @@ def main(params):
         # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
         # scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
         # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=500, factor=0.9, min_lr=0.000001)
-    elif params["architecture"]=="special_token" or params["architecture"]=="raw_context_text" or params["architecture"] == "baseline" or params["architecture"] == "mlp_with_bert":
+    elif params["architecture"] in bert_based_architecture:
         optimizer = get_optimizer(model, params)
         # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
 
@@ -389,7 +413,7 @@ def main(params):
         context_input = context_input[:max_n]
         candidate_input = candidate_input[:max_n]
         label_input = label_input[:max_n]
-    if params["top_k"]<100 and params["architecture"] != "mlp_with_som" and params["architecture"] != "som":
+    if params["top_k"]<100 and not params["architecture"] in oom_architecture:
         context_input = modify(context_input, candidate_input_train, params, src_input, idxs, mode = "train", wo64 = params["without_64"])
     if params["zeshel"]:
         train_tensor_data = TensorDataset(context_input, label_input, src_input, idxs, bi_encoder_score,)
@@ -406,7 +430,7 @@ def main(params):
         batch_size=params["train_batch_size"]
     )
 
-    if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text" or params["architecture"] == "mlp_with_bert" or params["architecture"] == "baseline" or params["architecture"] == "mlp_with_som" or params["architecture"] == "som":
+    if params["architecture"] in scheduler_architecture:
         scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
     valid_split = params["valid_split"]
     for i in range(valid_split):
@@ -454,6 +478,7 @@ def main(params):
             bi_encoder_score = torch.cat((bi_encoder_score, valid_data["nn_scores"][:params["valid_size"]]), dim = 0)
             if params["zeshel"]:
                 src_input = valid_data['worlds'][:params["valid_size"]]
+    print("indices input", idxs.shape)
     bi_val_mrr=torch.mean(1/(label_input+1)).item()
     bi_val_accuracy = torch.mean((label_input == 0).float()).item()
     bi_val_recall_4 = torch.mean((label_input <= 3).float()).item()
@@ -471,7 +496,7 @@ def main(params):
         label_input = label_input[:max_n]
     # print("valid context", context_input.shape)
     # print("valid candidate", candidate_input.shape)
-    if params["top_k"]<100 and params["architecture"] != "mlp_with_som" and params["architecture"] != "som":
+    if params["top_k"]<100 and not params["architecture"] in oom_architecture:
         context_input = modify(context_input, candidate_input_valid, params, src_input, idxs, mode = "valid", wo64=params["without_64"])
     # print("valid modify", context_input.shape)
     valid_tensor_data = TensorDataset(context_input, label_input, src_input, idxs)
@@ -523,7 +548,8 @@ def main(params):
     # elif params["optimizer"]=="RMSprop":
         # optimizer = optim.RMSprop(model.parameters(), lr=params["learning_rate"])
  
-    if params["architecture"] != "mlp":
+    if params["architecture"] in scheduler_architecture:
+        # when training resumes, use scheduler.step() multiple times to get aligned with previous run
         optimizer.step()
         for i in range(int(len(train_tensor_data) / params["train_batch_size"] / params["gradient_accumulation_steps"]) * epoch_idx_global + previous_step):
             scheduler.step()
@@ -570,7 +596,7 @@ def main(params):
             # print(batch[1].shape)
             context_input = batch[0] 
             label_input = batch[1]
-            if params["top_k"]>100 or params["architecture"] == "mlp_with_som" or params["architecture"] == "som":
+            if params["top_k"]>100 or params["architecture"] in oom_architecture:
                 world = batch[2]
                 idxs = batch[3]
                 context_input = modify(context_input, candidate_input_train, params, world, idxs, mode = "train", wo64 = params["without_64"])
@@ -588,7 +614,7 @@ def main(params):
             tr_loss += loss.item()
             
             if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
-                print("optimizer:", optimizer)
+                # print("optimizer:", optimizer)
             
                 logger.info(
                     "Step {} - epoch {} average training loss: {}\n".format(
@@ -614,7 +640,7 @@ def main(params):
                 )
                 optimizer.step()
 
-                if params["architecture"]=="special_token" or params["architecture"]=="raw_context_text" or params["architecture"]=="mlp_with_bert"  or params["architecture"]=="mlp_with_som" or params["architecture"]=="som":
+                if params["architecture"] in scheduler_architecture:
                     scheduler.step()
                 optimizer.zero_grad()
  #               for i, param in enumerate(list(reranker.named_parameters())):
@@ -662,12 +688,12 @@ def main(params):
             model.eval()
             for step, batch in enumerate(iter_valid):
                 batch = tuple(t.to(device) for t in batch)
-                context_input = batch[0] 
+                context_input = batch[0]    
                 label_input = batch[1]
-                if params["top_k"]>100:
-                    world = batch[2]
-                    idxs = batch[3]
-                    context_input = modify(context_input, candidate_input_valid, params, world, idxs, mode = "valid", wo64 = params["without_64"])
+                
+                world = batch[2]
+                idxs = batch[3]
+                context_input = modify(context_input, candidate_input_valid, params, world, idxs, mode = "valid", wo64 = params["without_64"])
                 val_loss, _ = reranker(context_input, label_input, context_length)
                             # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
                 val_loss_sum += val_loss.item()
@@ -742,7 +768,7 @@ def main(params):
         output_eval_file = os.path.join(epoch_output_folder_path, "eval_results.txt")
         
 
-        if (val_acc["normalized_accuracy"]<=last_acc):
+        if (val_acc["normalized_accuracy"]<=best_score):
             trigger_times+=1
             if (trigger_times>patience):
                 logger.info("Early stopping by Patience")
@@ -841,7 +867,7 @@ def main(params):
         label_input = label_input[:max_n]
     if params["zeshel"]:
         src_input = test_data['worlds'][:params["test_size"]]
-    if params["top_k"]<100 and params["architecture"] != "mlp_with_som" and params["architecture"] != "som":
+    if params["top_k"]<100 and not params["architecture"] in oom_architecture:
         context_input = modify(context_input, candidate_input_test, params, src_input, idxs, mode = "test", wo64 = params["without_64"])
 
     if params["zeshel"]:

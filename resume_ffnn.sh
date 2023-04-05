@@ -22,7 +22,7 @@ layers=`grep -o '"layers": [^,]*' ./models/zeshel/crossencoder/mlp/$1/training_p
 train_batch_size=`grep -o '"train_batch_size": [^,]*' ./models/zeshel/crossencoder/mlp/$1/training_params/training_params.json | grep -o '[^ ]*$'`
 decoding=`grep -o '"decoder": [^,]*' ./models/zeshel/crossencoder/mlp/$1/training_params/training_params.json | grep -o '[^ ]*$'`
 echo "act_fn=${act_fn}, lr=${lr}, dim_red=${dim_red}, layers=${layers}, train_batch_size=${train_batch_size}, decoding=${decoding}"
-python_output=$(python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --act_fn=${act_fn} --decoder=${decoding} --dim_red=${dim_red} --layers=${layers} --learning_rate=${lr} --train_batch_size=${train_batch_size} --sampling False --eval_batch_size 32 --hard_negative False --binary_loss False --data_path=models/zeshel_test/top1000_candidates/ --resume=True --run_id=$1)
+python_output=$(python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --act_fn=${act_fn} --decoder=${decoding} --dim_red=${dim_red} --layers=${layers} --learning_rate=${lr} --train_batch_size=${train_batch_size} --sampling False --eval_batch_size 32 --hard_negative False --binary_loss False --data_path=models/zeshel_test/top1000_candidates/ --resume=True --run_id=$1 --train_split 1)
 echo $python_output
 time_out=$(echo "$python_output" | grep -E "time_out")
 run_id=$1

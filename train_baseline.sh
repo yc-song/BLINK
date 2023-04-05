@@ -5,7 +5,7 @@
 #SBATCH --time=0-12:00:00
 #SBATCH --mem=200000MB
 #SBATCH --cpus-per-task=8
-#SBATCH --gpus-per-node=4
+#SBATCH --gpus-per-node=1
 #SBATCH --partition=P1
 #SBATCH --output=/home/jongsong/BLINK/slurm_output/bert/%j.out
 #SBATCH --error=/home/jongsong/BLINK/slurm_output/bert/%j.error
@@ -15,4 +15,5 @@ conda activate
 conda activate blink
 PYTHONPATH=.
 wandb enabled
-python blink/crossencoder/train_cross.py --train_batch_size=4 --act_fn=softplus --train_size 10000 --valid_size 5000 --decoder=True --dim_red=768 --layers=2 --learning_rate=1e-3 --top_k=64 --architecture mlp_with_bert --sampling False --hard_negative False --binary_loss False --num_train_epochs 20 --data_path=models/zeshel_test/top64_candidates/ --path_to_model /home/jongsong/BLINK/models/zeshel/biencoder/pytorch_model.bin --eval_batch_size 64 --lowercase --train_split 1
+wandb login
+python blink/crossencoder/train_cross.py --train_batch_size=4 --act_fn=softplus --decoder=True --dim_red=768 --layers=2 --learning_rate=1e-5 --top_k=64 --architecture mlp --sampling False --hard_negative False --binary_loss False --num_train_epochs 10 --data_path=models/zeshel_test/top64_candidates/ --eval_batch_size 32 --lowercase --train_split 1

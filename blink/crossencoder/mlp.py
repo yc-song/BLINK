@@ -51,6 +51,9 @@ class MlpModel(nn.Module):
             )
         self.build_model()
         self.top_k = params["top_k"]
+        if params["path_to_model"] is not None:
+            print("load")
+            self.load_model(params["path_to_model"])
         self.model = self.model.to(self.device)
         # self.model = torch.nn.DataParallel(self.model)
     def build_model(self):
@@ -63,9 +66,9 @@ class MlpModel(nn.Module):
         torch.save(self.model.state_dict(), output_dir)
     def load_model(self, fname, cpu=False):
         if cpu:
-            state_dict = torch.load(fname, map_location=lambda storage, location: "cpu")
+            state_dict = torch.load(fname, map_location=lambda storage, location: "cpu")["model_state_dict"]
         else:
-            state_dict = torch.load(fname)
+            state_dict = torch.load(fname)["model_state_dict"]
         self.model.load_state_dict(state_dict)
     def forward(self, input, label_input, context_length,  bi_encoder_score = None, evaluate = False):
         # summary(self.model, input_size=(1, 2, 1024))

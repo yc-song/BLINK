@@ -7,8 +7,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-node=2
 #SBATCH --partition=P1
-#SBATCH --output=/home/jongsong/BLINK/slurm_output/bert/%j.out
-#SBATCH --error=/home/jongsong/BLINK/slurm_output/bert/%j.error
+#SBATCH --output=/home/jongsong/BLINK/slurm_output/mlp_with_som/%j.out
+#SBATCH --error=/home/jongsong/BLINK/slurm_output/mlp_with_som/%j.error
 
 source /home/${USER}/.bashrc
 source ~/anaconda3/etc/profile.d/conda.sh
@@ -18,5 +18,5 @@ conda activate blink
 PYTHONPATH=.
 wandb enabled
 wandb online
-wandb agent jongsong/mlp-with-som/ves3748u --count 1
+wandb agent jongsong/mlp-with-som/hxbb73bq --count 1
 sbatch train_sweep_mlp_with_som.sh
