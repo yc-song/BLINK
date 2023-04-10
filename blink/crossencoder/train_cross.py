@@ -35,7 +35,6 @@ from blink.biencoder.zeshel_utils import DOC_PATH, WORLDS, world_to_id
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import BlinkParser
 from blink.crossencoder.mlp import MlpModel
-import deepspeed
 # from pytorch_lightning.callbacks import EarlyStopping
 import matplotlib.pyplot as plt
 logger = None
