@@ -225,6 +225,22 @@ class MlpwithBiEncoderRanker(CrossEncoderRanker):
     def __init__(self, params, shared=None):
         super(MlpwithBiEncoderRanker, self).__init__(params)
         self.params = params
+        if params["path_to_model"] is not None:
+            print("bert load")
+            self.load_model(params["path_to_model"])
+            # self.print_parameters()
+        if params["path_to_mlpmodel"] is not None:
+            print("load_mlp")
+            state_dict = torch.load(params["path_to_mlpmodel"])['model_state_dict']
+            new_state_dict = OrderedDict()
+            for k, v in state_dict.items():
+                name = 'module.mlpmodule.' + k
+                new_state_dict[name] = v
+            self.model.load_state_dict(new_state_dict, strict = False)
+            # self.print_parameters()
+    def print_parameters(self):
+        for name, param in self.model.named_parameters():
+            print (name, param.data)
     def build_model(self):
         self.model = MlpwithBiEncoderModule(self.params, self.tokenizer)
     def load_model(self, fname, cpu=False):

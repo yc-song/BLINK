@@ -15,4 +15,6 @@ conda activate
 conda activate blink
 PYTHONPATH=.
 wandb enabled
-python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --act_fn=softplus --decoder=True --dim_red=1152 --layers=2 --learning_rate=0.0006323286895058995 --train_batch_size=512 --train_split 1
+wandb login
+python /home/jongsong/BLINK/blink/crossencoder/train_cross.py --decoder=False --dim_red=1152 --layers=2 --learning_rate=0.00016843606494416268 --train_batch_size=416 --train_split 1
+

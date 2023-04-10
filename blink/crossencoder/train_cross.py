@@ -318,6 +318,7 @@ def main(params):
         reranker = CrossEncoderRanker(params)
     tokenizer = reranker.tokenizer
     model = reranker.model
+    
     if reranker.n_gpu > 0:
         torch.cuda.manual_seed_all(seed)
     if params["architecture"] in mlp_based_architecture:
@@ -356,7 +357,7 @@ def main(params):
         run = wandb.init(project=params["wandb"], config=parser, resume="must", id=params["run_id"])
         print("file loaded:", most_recent_file)
         checkpoint = torch.load(most_recent_file)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        reranker.load_state_dict(checkpoint['model_state_dict'])
         epoch_idx_global = checkpoint['epoch']
         previous_step = checkpoint['step']
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -652,10 +653,9 @@ def main(params):
                 epoch_output_folder_path = os.path.join(
                 model_output_path, "epoch_{}_{}".format(epoch_idx, step)
             )
-
                 torch.save({
                 'epoch': epoch_idx,
-                'model_state_dict': model.state_dict(),
+                'model_state_dict': reranker.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'step': step,
                 }, epoch_output_folder_path)

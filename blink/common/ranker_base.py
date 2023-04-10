@@ -33,9 +33,9 @@ class BertEncoder(nn.Module):
         # get embedding of [M_s] and [ENT] token (context: token_id=1, candidate: token_id=2)
         embeddings_late_interaction = None
         if (data_type =="context"):
-            m_s_index=(token_ids==1).nonzero(as_tuple=True)[1]
+            m_s_index=(token_ids==2).nonzero(as_tuple=True)[1]
         elif (data_type=="candidate"):
-            m_s_index=(token_ids==3).nonzero(as_tuple=True)[1]
+            m_s_index=(token_ids==4).nonzero(as_tuple=True)[1]
         else:
             raise ValueError
         if self.additional_linear is not None:

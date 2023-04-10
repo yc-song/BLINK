@@ -162,6 +162,13 @@ class BlinkParser(argparse.ArgumentParser):
             help="The full path to the model to load.",
         )
         parser.add_argument(
+            "--path_to_mlpmodel",
+            default=None,
+            type=str,
+            required=False,
+            help="The full path to the mlp model to load. (in case of mlp-with-bert model)",
+        )
+        parser.add_argument(
             "--bert_model",
             default=config["bert_model"],
             type=str,
