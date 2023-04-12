@@ -298,11 +298,57 @@ class MlpwithSOMModule(nn.Module):
         output = torch.sum(self.mlpmodule(input), -2)
         return output.squeeze(-1)
 
+class MlpwithSOMModuleCosSimilarity(nn.Module):
+    def __init__(self, input_size):
+        super(MlpwithSOMModuleCosSimilarity, self).__init__()
+        self.cossimilarity = nn.CosineSimilarity(dim = -1)
+        self.input_size = input_size
+        self.mlpmodule = MlpModule(self.input_size)
+    def forward(self, context):
+        eps = 1e-8
+        entity = context[:,:,1,:,:]
+        context = context[:,:,0,:,:] #(max_length, embedding_dimension)
+        batch_size = entity.size(0)
+        top_k = entity.size(1)
+        max_length = entity.size(2)
+        embedding_dimension = entity.size(3)
+        entity = entity.reshape(-1, max_length, embedding_dimension)
+        context = context.reshape(-1, max_length, embedding_dimension)
+
+        # perform batch-wise dot product using torch.bmm
+        # output = self.cossimilarity(context.unsqueeze(2), entity.unsqueeze(1))
+        # print(context, entity)
+        context_norm = torch.linalg.norm(context, dim = -1, keepdim = True)
+        entity_norm = torch.linalg.norm(entity, dim = -1, keepdim = True)
+        # print("1", context_norm, entity_norm)
+
+        denominator = context_norm@entity_norm.transpose(1,2)+eps
+        # print("denominator", denominator, denominator.shape)
+        output = torch.bmm(context, entity.transpose(1,2))/denominator
+        # print("output shape 1", output)
+        # reshape the output tensor to have shape (128, 128)
+        output = output.reshape(batch_size, top_k, max_length, max_length)
+        # print("output shape 2", output)
+        context = context.reshape(batch_size, top_k, max_length, embedding_dimension)
+
+        entity = entity.reshape(batch_size, top_k, max_length, embedding_dimension)
+        argmax_values = torch.argmax(output, dim=-1)
+        # print(entity[argmax_values].shape)
+        input = torch.stack([context, torch.gather(entity, dim =2, index = argmax_values.unsqueeze(-1).expand(-1,-1,-1,embedding_dimension))], dim = -2)
+        # print("input shape", input.shape)
+        output = torch.sum(self.mlpmodule(input), -2)
+        # print("output shape", output.shape)
+
+        return output.squeeze(-1)
+
 class MlpwithSOMRanker(CrossEncoderRanker): 
     def __init__(self, params, shared=None):
         super(MlpwithSOMRanker, self).__init__(params)
     def build_model(self):
-        self.model = MlpwithSOMModule(self.params)
+        if self.params["cos_similarity"]:
+            self.model = MlpwithSOMModuleCosSimilarity(self.params)
+        else:
+            self.model = MlpwithSOMModule(self.params)
     def forward(self, input, label_input, context_length, evaluate = False):
         scores = self.model(input)
         loss = F.cross_entropy(scores, label_input)

@@ -301,6 +301,11 @@ class BlinkParser(argparse.ArgumentParser):
             help="The txt file where the the evaluation results will be written.",
         )
         parser.add_argument(
+            "--cos_similarity",
+            action = "store_true",
+            help="replace dot product with cos similarity in mlp-with-som module",
+        )
+        parser.add_argument(
             "--sampling",
             default=config["sampling"],
             type=str2bool,
