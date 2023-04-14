@@ -120,6 +120,9 @@ class BlinkParser(argparse.ArgumentParser):
             "--with_mlp", action="store_true", help="Whether to add mlp layers on top of Bi-encoder."
         )
         parser.add_argument(
+            "--anncur", action="store_true", help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
             "--act_fn",
             default=config["act_fn"],
             help="softplus, sigmoid, tanh",
@@ -399,7 +402,7 @@ class BlinkParser(argparse.ArgumentParser):
             help="Interval for evaluation during training",
         )
         parser.add_argument(
-            "--save_interval", type=int, default=1, 
+            "--save_interval", type=int, default=config["save_interval"], 
             help="Interval for model saving"
         )
         parser.add_argument(

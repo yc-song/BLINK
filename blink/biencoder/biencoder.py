@@ -10,13 +10,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
-
+from pytorch_lightning import LightningModule
 from pytorch_transformers.modeling_bert import (
     BertPreTrainedModel,
     BertConfig,
     BertModel,
 )
-
+from collections import OrderedDict
 from pytorch_transformers.tokenization_bert import BertTokenizer
 
 from blink.common.ranker_base import BertEncoder, get_model_obj
@@ -31,6 +31,10 @@ def load_biencoder(params):
 class BiEncoderModule(torch.nn.Module):
     def __init__(self, params, tokenizer):
         super(BiEncoderModule, self).__init__()
+        if params["anncur"]:
+            config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
+            ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
+            cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
         ctxt_bert = BertModel.from_pretrained(params["bert_model"])
         cand_bert = BertModel.from_pretrained(params['bert_model'])
         ctxt_bert.resize_token_embeddings(len(tokenizer))
@@ -48,6 +52,7 @@ class BiEncoderModule(torch.nn.Module):
             add_linear=params["add_linear"],
         )
         self.config = ctxt_bert.config
+        self.params = params
 
     def forward(
         self,
@@ -63,14 +68,14 @@ class BiEncoderModule(torch.nn.Module):
         embedding_late_interaction_ctxt = None
         if token_idx_ctxt is not None:
             embedding_ctxt, cls_ctxt, embedding_late_interaction_ctxt = self.context_encoder(
-                token_idx_ctxt, segment_idx_ctxt, mask_ctxt
+                token_idx_ctxt, segment_idx_ctxt, mask_ctxt, params = self.params
             )
         embedding_cands = None
         cls_cands=None
         embedding_late_interaction_cands = None
         if token_idx_cands is not None:
             embedding_cands, cls_cands, embedding_late_interaction_cands = self.cand_encoder(
-                token_idx_cands, segment_idx_cands, mask_cands, data_type="candidate"
+                token_idx_cands, segment_idx_cands, mask_cands, data_type="candidate", params = self.params
             )
         return embedding_ctxt, embedding_cands, cls_ctxt, cls_cands, embedding_late_interaction_ctxt, embedding_late_interaction_cands
 
@@ -88,17 +93,24 @@ class BiEncoderRanker(torch.nn.Module):
         self.tokenizer = BertTokenizer.from_pretrained(
             params["bert_model"], do_lower_case=params["lowercase"]
         )
-        special_tokens_dict = {
-            "additional_special_tokens": [
-                ENT_START_TAG,
-                ENT_END_TAG,
-                ENT_TITLE_TAG,
-            ],
-        }
-        self.tokenizer.add_special_tokens(special_tokens_dict)
+        if params["anncur"]:
+            self.tokenizer = BertTokenizer.from_pretrained(
+			"bert-base-uncased", do_lower_case=True
+		)
+        if not params["anncur"]:
+            special_tokens_dict = {
+                "additional_special_tokens": [
+                    ENT_START_TAG,
+                    ENT_END_TAG,
+                    ENT_TITLE_TAG,
+                ],
+            }
+            self.tokenizer.add_special_tokens(special_tokens_dict)
+
+            self.START_TOKEN = self.tokenizer.cls_token
+
+            self.END_TOKEN = self.tokenizer.sep_token
         self.NULL_IDX = self.tokenizer.pad_token_id
-        self.START_TOKEN = self.tokenizer.cls_token
-        self.END_TOKEN = self.tokenizer.sep_token
         # init model
         self.build_model()
         model_path = params.get("path_to_model", None)
@@ -110,11 +122,26 @@ class BiEncoderRanker(torch.nn.Module):
             self.model = torch.nn.DataParallel(self.model)
 
     def load_model(self, fname, cpu=False):
-        if cpu:
-            state_dict = torch.load(fname, map_location=lambda storage, location: "cpu")
+        if self.params["anncur"]:
+            if cpu:
+                state_dict = torch.load(fname, map_location=lambda storage, location: "cpu")["state_dict"]
+            else:
+                state_dict = torch.load(fname)["state_dict"]
+            new_state_dict = OrderedDict()
+            for k, v in state_dict.items():
+                if k.startswith('model.input_encoder'):
+                    name = k.replace('model.input_encoder', 'context_encoder')
+                elif k.startswith('model.label_encoder'):
+                    name = k.replace('model.label_encoder', 'cand_encoder')
+                new_state_dict[name] = v
+            self.model.load_state_dict(new_state_dict)
+
         else:
-            state_dict = torch.load(fname)
-        self.model.load_state_dict(state_dict)
+            if cpu:
+                state_dict = torch.load(fname, map_location=lambda storage, location: "cpu")
+            else:
+                state_dict = torch.load(fname)
+            self.model.load_state_dict(state_dict)
 
     def build_model(self):
         self.model = BiEncoderModule(self.params, self.tokenizer)

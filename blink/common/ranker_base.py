@@ -26,7 +26,7 @@ class BertEncoder(nn.Module):
         else:
             self.additional_linear = None
 
-    def forward(self, token_ids, segment_ids, attention_mask, data_type="context"):
+    def forward(self, token_ids, segment_ids, attention_mask, data_type="context", params = None):
         output_bert, output_pooler = self.bert_model(
             token_ids, segment_ids, attention_mask
         )
@@ -49,5 +49,6 @@ class BertEncoder(nn.Module):
             result = self.additional_linear(self.dropout(embeddings))
         else:
             result = embeddings
+
         return result, cls_token, embeddings_late_interaction
 

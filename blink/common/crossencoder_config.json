@@ -24,6 +24,7 @@
 "dim_red": 512,
 "train_size": -1,
 "valid_size": -1,
+"save_interval": 500,
 "test_size": -1,
 "architecture": "mlp",
 "scheduler_gamma": 0.9,

@@ -38,6 +38,6 @@ PYTHONPATH=.
 # FFNN (more hyperparameters)
 # wandb agent jongsong/BLINK-blink_crossencoder/hk6df3p3
 # FFNN (w/o label idx 64)
-wandb agent jongsong/BLINK-blink_crossencoder/0k2xngs1 --count 20
+wandb agent jongsong/BLINK-blink_crossencoder/fgvytw7p
 # special tokens (train size 조정)
 # wandb agent jongsong/BLINK-blink_crossencoder/848ggawn

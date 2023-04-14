@@ -82,6 +82,8 @@ class MlpwithSOMCosSimilarityModule(nn.Module):
         print("denominator", denominator, denominator.shape)
         print("2", torch.bmm(context, entity.transpose(1,2)).shape)
         output = torch.bmm(context, entity.transpose(1,2))/denominator
+        context/=context_norm
+        entity/=entity_norm
         print("output shape 1", output)
         # reshape the output tensor to have shape (128, 128)
         output = output.reshape(batch_size, top_k, max_length, max_length)

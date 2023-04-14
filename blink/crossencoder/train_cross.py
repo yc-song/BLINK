@@ -63,6 +63,10 @@ bert_based_architecture = [
     "baseline"
 ]
 
+def sorted_ls(path):
+    mtime = lambda f: os.stat(os.path.join(path, f)).st_mtime
+    return list(sorted(os.listdir(path), key=mtime))
+
 def modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = True):
     device = torch.device('cuda')
     # get values of candidates first
@@ -200,7 +204,6 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
             logger.info("Macro accuracy: %.5f" % (macro / num))
             logger.info("Micro accuracy: %.5f" % normalized_eval_accuracy)
     
-    
     else:
         if logger:
             logger.info("Eval accuracy: %.5f" % normalized_eval_accuracy)
@@ -210,8 +213,10 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
         logger.info("Micro accuracy @ label 64: %.5f" % normalized_eval_accuracy_64)
 
     logger.info("Recall@4: %.5f" % eval_recall)
-
-
+    if num != 0:
+        results["macro_accuracy"] = macro/num
+    else:
+        results["macro_accuracy"] = 0
     results["normalized_accuracy"] = normalized_eval_accuracy
     results["logits"] = all_logits
     results["mrr"]=eval_mrr
@@ -342,6 +347,7 @@ def main(params):
         print("model architecture", model.layers)
     # if you want to resume the training, set "resume" true and specify "run_id"
     if params["resume"]==True:
+        print('*****************')
         folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"], params["run_id"])
         each_file_path_and_gen_time = []
         ## Getting newest file
@@ -525,6 +531,7 @@ def main(params):
         )
         wandb.log({
             "acc/val_acc": val_acc["normalized_accuracy"],
+            "acc/val_acc(macro)": val_acc["macro_accuracy"]
             })
 
     number_of_samples_per_dataset = {}
@@ -555,6 +562,7 @@ def main(params):
             scheduler.step()
     best_epoch_idx = -1
     best_score = -1
+    best_score_macro = -1
     #Early stopping variables
     patience=params["patience"]
     last_acc=1
@@ -646,9 +654,8 @@ def main(params):
  #               for i, param in enumerate(list(reranker.named_parameters())):
   #                  print(param)
   #                  print(list(reranker.parameters())[i].grad)
-            save_interval=500
-            if not step % save_interval and params["save"]:
-                logger.info("***** Saving fine - tuned model *****")
+            if not step % params["save_interval"] and params["save"]:
+                logger.info("***** Saving fine - tuned model to {}*****".format(model_output_path))
                 epoch_output_folder_path = os.path.join(
                 model_output_path, "epoch_{}_{}".format(epoch_idx, step)
             )
@@ -661,10 +668,11 @@ def main(params):
                 folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"],run.id)
 
                 # each_file_path_and_gen_time = []
-                for filename in sorted(os.listdir(folder_path))[:-5]:
-                    filename_relPath = os.path.join(folder_path,filename)
-                    print(filename_relPath)
-                    os.remove(filename_relPath)
+                max_Files = 5
+                del_list = sorted_ls(folder_path)[0:(len(sorted_ls(folder_path))-max_Files)]
+                for dfile in del_list:
+                    if dfile[0]=="e":
+                        os.remove(folder_path + dfile)
                 # for each_file_name in os.listdir(folder_path):
                 #     each_file_path = folder_path + each_file_name
                 #     each_file_gen_time = os.path.getctime(each_file_path)
@@ -724,6 +732,7 @@ def main(params):
             )
             wandb.log({
             "acc/train_acc": train_acc["normalized_accuracy"],
+            "acc/train_acc(macro)": train_acc["macro_accuracy"],
             'mrr/train_mrr':train_acc["mrr"],
             "recall/train_recall":train_acc["recall"],
             "params/epoch": epoch_idx
@@ -743,6 +752,7 @@ def main(params):
             )
             wandb.log({
             "acc/train_acc": train_acc["normalized_accuracy"],
+            "acc/train_acc(macro)": train_acc["macro_accuracy"],
             'mrr/train_mrr':train_acc["mrr"],
             "recall/train_recall":train_acc["recall"],
             "params/epoch": epoch_idx
@@ -762,6 +772,7 @@ def main(params):
         )
         wandb.log({
             "acc/val_acc": val_acc["normalized_accuracy"],
+            "acc/val_acc(macro)": val_acc["macro_accuracy"],
             "params/epoch": epoch_idx
             })
         output_eval_file = os.path.join(epoch_output_folder_path, "eval_results.txt")
@@ -782,11 +793,14 @@ def main(params):
         last_acc=val_acc["normalized_accuracy"]
 
         ls = [best_score, val_acc["normalized_accuracy"]]
+        ls_macro = [best_score_macro, val_acc["macro_accuracy"]]
         li = [best_epoch_idx, epoch_idx]
 
         best_score = ls[np.argmax(ls)]
+        best_score_macro = ls_macro[np.argmax(ls_macro)]
         best_epoch_idx = li[np.argmax(ls)]
         wandb.log({"acc/best_val_acc": best_score,
+        "acc/best_val_acc(macro)": best_score_macro,
         "acc/best_epoch_idx": best_epoch_idx})
 
         # if (step + 1) % grad_acc_steps == 0:
@@ -795,9 +809,11 @@ def main(params):
             wandb.log({         
                 "params/learning_rate":  optimizer.param_groups[0]['lr'],
                 "acc/train_acc": train_acc["normalized_accuracy"],
+                "acc/train_acc(macro)": train_acc["macro_accuracy"],
                 "acc_64/train_acc_64": train_acc["normalized_accuracy_64"],
                 "acc_not64/train_acc_not64": train_acc["normalized_accuracy_not64"],
                 "acc/val_acc":val_acc["normalized_accuracy"],
+                "acc/val_acc(macro)":val_acc["macro_accuracy"],
                 "acc_64/val_acc_64":val_acc["normalized_accuracy_64"],
                 "acc_not64/val_acc_not64":val_acc["normalized_accuracy_not64"],
                 'mrr/train_mrr':train_acc["mrr"],
@@ -901,6 +917,7 @@ def main(params):
     if params["without_64"]==False:
         wandb.log({         
                 "acc/test_acc":test_acc["normalized_accuracy"],
+                "acc/test_acc(macro)":test_acc["macro_accuracy"],
                 "wo64/test_acc_64":test_acc["normalized_accuracy_64"],
                 "wo64/test_acc_not64":test_acc["normalized_accuracy_not64"],
                 "recall/test_recall":test_acc["recall"],
