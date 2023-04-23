@@ -101,10 +101,10 @@ class MlpwithSOMCosSimilarityModule(nn.Module):
         return output
 device = torch.device('cuda')
 
-batch_size = 2
-top_k = 3
-max_length = 4
-embedding_dimension = 5
+batch_size = 128
+top_k = 64
+max_length = 128
+embedding_dimension = 768
 ### modify ###
 context = torch.randint(2,(batch_size, max_length, embedding_dimension))*1.0
 entity = torch.randint(2, (batch_size, top_k, max_length, embedding_dimension))*1.0
@@ -113,5 +113,7 @@ entity = torch.randint(2, (batch_size, top_k, max_length, embedding_dimension))*
 
 context = context.unsqueeze(1).expand(-1, top_k, -1, -1)
 context = torch.stack((context, entity), dim = 2)   
+print(context.shape)
+raise("error")
 mlpmodule = MlpwithSOMCosSimilarityModule(10)
 print(mlpmodule(context).shape)

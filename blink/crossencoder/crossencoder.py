@@ -30,8 +30,8 @@ from pytorch_transformers.modeling_roberta import (
 from pytorch_transformers.tokenization_bert import BertTokenizer
 from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 
-from blink.common.ranker_base_cross import BertEncoder, get_model_obj
-from blink.common.ranker_base import BertEncoder as BertEncoder_baseline
+# from blink.common.ranker_base_cross import BertEncoder, get_model_obj
+from blink.common.ranker_base import BertEncoder
 
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import ENT_START_TAG, ENT_END_TAG, ENT_TITLE_TAG
@@ -59,7 +59,7 @@ class CrossEncoderModule(torch.nn.Module):
             encoder_model = BertModel.from_pretrained(model_path)
         encoder_model.resize_token_embeddings(len(tokenizer))
         if params["architecture"] == "baseline":
-            self.encoder = BertEncoder_baseline(
+            self.encoder = BertEncoder(
                 encoder_model,
                 params["out_dim"],
                 layer_pulled=params["pull_from_layer"],
@@ -113,7 +113,7 @@ class CrossEncoderRanker(torch.nn.Module):
 
         # init model
         self.build_model()
-        if params["path_to_model"] is not None:
+        if params["path_to_model"] is not None and params["anncur"] is None:
             print("load")
             self.load_model(params["path_to_model"])
         self.model = self.model.to(self.device)
@@ -201,42 +201,89 @@ class MlpwithBiEncoderModule(BiEncoderModule):
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
         )
-        self.mlpmodule = MlpModule(self.params).to(self.device)
-    
+        if params["architecture"] == "mlp_with_bert":
+            self.mlpmodule = MlpModule(self.params).to(self.device)
+        elif params["architecture"] == "mlp_with_som_finetuning":
+            self.mlpwithsommodule = MlpwithSOMModuleCosSimilarity(self.params).to(self.device)
+            # self.mlpwithsommodule = MlpwithSOMModule(self.params).to(self.device)
+        
+        if params["anncur"]:
+            config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
+            ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
+            cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
+        else:
+            ctxt_bert = BertModel.from_pretrained(params["bert_model"])
+            cand_bert = BertModel.from_pretrained(params['bert_model'])
+        ctxt_bert.resize_token_embeddings(len(tokenizer))
+        cand_bert.resize_token_embeddings(len(tokenizer))
+        self.context_encoder = BertEncoder(
+            ctxt_bert,
+            params["out_dim"],
+            layer_pulled=params["pull_from_layer"],
+            add_linear=params["add_linear"],
+        )
+        self.cand_encoder = BertEncoder(
+            cand_bert,
+            params["out_dim"],
+            layer_pulled=params["pull_from_layer"],
+            add_linear=params["add_linear"],
+        )
+        self.config = ctxt_bert.config
+        self.params = params
+
     def forward(
         self, token_idx_ctxt, segment_idx_ctxt, mask_ctxt, token_idx_cands, segment_idx_cands, mask_cands, num_cand
     ):
         # Obtaining BERT embedding of context and candidate from bi-encoder
         embedding_ctxt = None
         if token_idx_ctxt is not None:
-            embedding_ctxt, cls_ctxt, _ = self.context_encoder(
+            embedding_ctxt, cls_ctxt, all_embeddings_ctxt = self.context_encoder(
                 token_idx_ctxt, segment_idx_ctxt, mask_ctxt
             )
         embedding_cands = None
         if token_idx_cands is not None:
-            embedding_cands, cls_cands, _ = self.cand_encoder(
+            embedding_cands, cls_cands, all_embeddings_cands = self.cand_encoder(
                 token_idx_cands, segment_idx_cands, mask_cands, data_type="candidate"
             )
-        score = self.mlpmodule(torch.cat((embedding_ctxt.unsqueeze(dim = 1), embedding_cands.unsqueeze(dim = 1)), dim=1).unsqueeze(dim = 0))
-
+            if self.params["architecture"] == "mlp_with_som_finetuning":
+                if self.params["bert_model"] == "bert-base-cased":
+                    bert_embedding_size = 768
+                elif self.params["bert_model"] == "bert-large-uncased":
+                    bert_embedding_size = 1024
+                all_embeddings_ctxt = all_embeddings_ctxt.reshape(-1, self.params["max_context_length"], bert_embedding_size)
+                all_embeddings_cands = all_embeddings_ctxt.reshape(-1, self.params["max_cand_length"], bert_embedding_size)
+                input = torch.stack((all_embeddings_ctxt, all_embeddings_cands), dim = 1)
+                score = self.mlpwithsommodule(input)
+            elif self.params["architecture"] == "mlp_with_bert":
+                score = self.mlpmodule(torch.cat((embedding_ctxt.unsqueeze(dim = 1), embedding_cands.unsqueeze(dim = 1)), dim=1).unsqueeze(dim = 0))
         return score
 
-class MlpwithBiEncoderRanker(CrossEncoderRanker): 
+class MlpwithBiEncoderRanker(BiEncoderRanker): 
     def __init__(self, params, shared=None):
         super(MlpwithBiEncoderRanker, self).__init__(params)
-        self.params = params
-        if params["path_to_model"] is not None:
-            print("bert load")
-            self.load_model(params["path_to_model"])
-            # self.print_parameters()
+
         if params["path_to_mlpmodel"] is not None:
-            print("load_mlp")
-            state_dict = torch.load(params["path_to_mlpmodel"])['model_state_dict']
-            new_state_dict = OrderedDict()
-            for k, v in state_dict.items():
-                name = 'module.mlpmodule.' + k
-                new_state_dict[name] = v
-            self.model.load_state_dict(new_state_dict, strict = False)
+            if params["architecture"] == "mlp_with_bert":
+                # print("load mlp")
+                # print("previous,",self.model.state_dict().items())
+                model_path = params.get("path_to_mlpmodel", None)
+                state_dict = torch.load(model_path)['model_state_dict']
+                new_state_dict = OrderedDict()
+                for k, v in state_dict.items():
+                    name = k.replace('model.','module.mlpmodule.' )
+                    new_state_dict[name] = v
+                self.model.load_state_dict(new_state_dict, strict = False)
+                # print("after,", self.model.state_dict().items())
+            elif params["architecture"] == "mlp_with_som_finetuning":
+                model_path = params.get("path_to_mlpmodel", None)
+                state_dict = torch.load(model_path)['model_state_dict']
+
+                new_state_dict = OrderedDict()
+                for k, v in state_dict.items():
+                    name = k.replace('model.module.','module.mlpwithsommodule.' )
+                    new_state_dict[name] = v
+                self.model.load_state_dict(new_state_dict, strict = False)
+            
             # self.print_parameters()
     def print_parameters(self):
         for name, param in self.model.named_parameters():
@@ -244,11 +291,53 @@ class MlpwithBiEncoderRanker(CrossEncoderRanker):
     def build_model(self):
         self.model = MlpwithBiEncoderModule(self.params, self.tokenizer)
     def load_model(self, fname, cpu=False):
-        if cpu:
-            state_dict = torch.load(fname, map_location=lambda storage, location: "cpu")
+        if self.params["anncur"]:
+            if cpu:
+                state_dict = torch.load(fname, map_location= "cpu")["state_dict"]
+            else:
+                state_dict = torch.load(fname)["state_dict"]
+            new_state_dict = OrderedDict()
+            for k, v in state_dict.items():
+                if k.startswith('model.input_encoder'):
+                    name = k.replace('model.input_encoder', 'context_encoder')
+                elif k.startswith('model.label_encoder'):
+                    name = k.replace('model.label_encoder', 'cand_encoder')
+                new_state_dict[name] = v
+            self.model.load_state_dict(new_state_dict, strict = False)
+        
         else:
-            state_dict = torch.load(fname)
-        self.model.load_state_dict(state_dict, strict = False)
+            if cpu:
+                state_dict = torch.load(fname, map_location=lambda storage, location: "cpu")
+            else:
+                state_dict = torch.load(fname)
+            self.model.load_state_dict(state_dict)
+
+    def forward(self, input_idx, label_input, context_len, evaluate = False):
+        scores = self.score_candidate(input_idx, context_len)
+        # print(input_idx.shape)
+        # print(scores.shape)
+        # print(label_input.shape)
+        loss = F.cross_entropy(scores, label_input, reduction="mean")
+        return loss, scores
+    def to_bert_input(self, token_idx, null_idx, segment_pos):
+        """ token_idx is a 2D tensor int.
+            return token_idx, segment_idx and mask
+        """
+        # token_idx shape: (2080, 2, 1024)
+        segment_idx = token_idx * 0
+        if segment_pos > 0:
+            segment_idx[:, segment_pos:] = token_idx[:, segment_pos:] != 0
+        if self.params["architecture"]=="special_token":
+            # mask dimension is supposed to be (2080, 2) rather than (2080, 2, 1024)
+            mask=torch.ones((token_idx.size(0), token_idx.size(1)),dtype=torch.bool)
+        else:
+            mask = token_idx != null_idx
+
+        # nullify elements in case self.NULL_IDX was not 0
+        # token_idx = token_idx * mask.long()
+        return token_idx, segment_idx, mask    
+
+
     def score_candidate(self, text_vecs, context_len):
         # Pre-processing input for MlpwithBiEncoderModule
         num_cand = text_vecs.size(1) # 64
@@ -294,7 +383,6 @@ class MlpwithSOMModule(nn.Module):
         argmax_values = torch.argmax(output, dim=-1)
         # print(entity[argmax_values].shape)
         input = torch.stack([context, torch.gather(entity, dim =2, index = argmax_values.unsqueeze(-1).expand(-1,-1,-1,embedding_dimension))], dim = -2)
-
         output = torch.sum(self.mlpmodule(input), -2)
         return output.squeeze(-1)
 
@@ -304,44 +392,88 @@ class MlpwithSOMModuleCosSimilarity(nn.Module):
         self.cossimilarity = nn.CosineSimilarity(dim = -1)
         self.input_size = input_size
         self.mlpmodule = MlpModule(self.input_size)
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
     def forward(self, context):
         eps = 1e-8
-        entity = context[:,:,1,:,:]
-        context = context[:,:,0,:,:] #(max_length, embedding_dimension)
+        entity = context[:,1,:,:]
+        context = context[:,0,:,:] #(batch*top_k,max_length, embedding_dimension)
+       
         batch_size = entity.size(0)
-        top_k = entity.size(1)
-        max_length = entity.size(2)
-        embedding_dimension = entity.size(3)
-        entity = entity.reshape(-1, max_length, embedding_dimension)
-        context = context.reshape(-1, max_length, embedding_dimension)
+        max_length = entity.size(1)
+        embedding_dimension = entity.size(2)
 
+        entity = torch.functional.normalize
         # perform batch-wise dot product using torch.bmm
         # output = self.cossimilarity(context.unsqueeze(2), entity.unsqueeze(1))
         # print(context, entity)
-        context_norm = torch.linalg.norm(context, dim = -1, keepdim = True)
-        entity_norm = torch.linalg.norm(entity, dim = -1, keepdim = True)
-        # print("1", context_norm, entity_norm)
+        # context_norm = torch.tensor(np.linalg.norm(context.detach().cpu().numpy(), axis = -1, keepdims = True)).to(self.device)
+        # entity_norm = torch.tensor(np.linalg.norm(entity.detach().cpu().numpy(), axis = -1, keepdims = True)).to(self.device)
 
-        denominator = context_norm@entity_norm.transpose(1,2)+eps
+        # context_norm = torch.linalg.norm(context, dim = -1, keepdim = True).clone()
+        # entity_norm = torch.linalg.norm(entity, dim = -1, keepdim = True).clone()
+        # print("1", context_norm, entity_norm)
+        
+        # denominator = context_norm@entity_norm.transpose(1,2)+eps
+        # context/=context_norm
+        # entity/=entity_norm
         # print("denominator", denominator, denominator.shape)
-        output = torch.bmm(context, entity.transpose(1,2))/denominator
-        context/=context_norm
-        entity/=entity_norm
+        output = torch.bmm(context, entity.transpose(1,2))
+        
         # print("output shape 1", output)
         # reshape the output tensor to have shape (128, 128)
-        output = output.reshape(batch_size, top_k, max_length, max_length)
-        # print("output shape 2", output)
-        context = context.reshape(batch_size, top_k, max_length, embedding_dimension)
-
-        entity = entity.reshape(batch_size, top_k, max_length, embedding_dimension)
         argmax_values = torch.argmax(output, dim=-1)
         # print(entity[argmax_values].shape)
-        input = torch.stack([context, torch.gather(entity, dim =2, index = argmax_values.unsqueeze(-1).expand(-1,-1,-1,embedding_dimension))], dim = -2)
-        # print("input shape", input.shape)
+        input = torch.stack([context, torch.gather(entity, dim =1, index = argmax_values.unsqueeze(-1).expand(-1,-1,embedding_dimension))], dim = -2)
         output = torch.sum(self.mlpmodule(input), -2)
         # print("output shape", output.shape)
-
         return output.squeeze(-1)
+
+# class MlpwithSOMModuleCosSimilarity(nn.Module):
+#     def __init__(self, input_size):
+#         super(MlpwithSOMModuleCosSimilarity, self).__init__()
+#         self.cossimilarity = nn.CosineSimilarity(dim = -1)
+#         self.input_size = input_size
+#         self.mlpmodule = MlpModule(self.input_size)
+#     def forward(self, context):
+#         eps = 1e-8
+#         entity = context[:,:,1,:,:]
+#         context = context[:,:,0,:,:] #(max_length, embedding_dimension)
+#         batch_size = entity.size(0)
+#         top_k = entity.size(1)
+#         max_length = entity.size(2)
+#         embedding_dimension = entity.size(3)
+#         entity = entity.reshape(-1, max_length, embedding_dimension)
+#         context = context.reshape(-1, max_length, embedding_dimension)
+
+#         # perform batch-wise dot product using torch.bmm
+#         # output = self.cossimilarity(context.unsqueeze(2), entity.unsqueeze(1))
+#         # print(context, entity)
+#         context_norm = torch.linalg.norm(context, dim = -1, keepdim = True)
+#         entity_norm = torch.linalg.norm(entity, dim = -1, keepdim = True)
+#         # print("1", context_norm, entity_norm)
+
+#         denominator = context_norm@entity_norm.transpose(1,2)+eps
+#         # print("denominator", denominator, denominator.shape)
+#         output = torch.bmm(context, entity.transpose(1,2))/denominator
+#         context/=context_norm
+#         entity/=entity_norm
+#         # print("output shape 1", output)
+#         # reshape the output tensor to have shape (128, 128)
+#         output = output.reshape(batch_size, top_k, max_length, max_length)
+#         # print("output shape 2", output)
+#         context = context.reshape(batch_size, top_k, max_length, embedding_dimension)
+
+#         entity = entity.reshape(batch_size, top_k, max_length, embedding_dimension)
+#         argmax_values = torch.argmax(output, dim=-1)
+#         # print(entity[argmax_values].shape)
+#         input = torch.stack([context, torch.gather(entity, dim =2, index = argmax_values.unsqueeze(-1).expand(-1,-1,-1,embedding_dimension))], dim = -2)
+#         # print("input shape", input.shape)
+#         output = torch.sum(self.mlpmodule(input), -2)
+#         # print("output shape", output.shape)
+
+#         return output.squeeze(-1)
 
 class MlpwithSOMRanker(CrossEncoderRanker): 
     def __init__(self, params, shared=None):
@@ -355,6 +487,7 @@ class MlpwithSOMRanker(CrossEncoderRanker):
         scores = self.model(input)
         loss = F.cross_entropy(scores, label_input)
         return loss, scores
+    
 class SOMModule(nn.Module):
     def __init__(self):
         super(SOMModule, self).__init__()

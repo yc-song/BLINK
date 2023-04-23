@@ -60,7 +60,8 @@ bert_based_architecture = [
     "mlp_with_bert",
     "raw_context_text",
     "special_token",
-    "baseline"
+    "baseline",
+    "mlp_with_som_finetuning"
 ]
 
 def sorted_ls(path):
@@ -99,7 +100,7 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
             new_input = torch.stack((context_input, candidate_input), dim = 2)
         else:
             context_input=context_input.unsqueeze(dim=1).expand(-1,top_k,-1).to(device)
-            if params["architecture"] =="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert":
+            if params["architecture"] =="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert"  or params["architecture"]=="mlp_with_som_finetuning":
                 new_input=torch.stack((context_input,candidate_input),dim=2) # shape: (Size, 65, 2, 1024) e.g. (10000, 65, 2 , 1024)
             elif params["architecture"] == "raw_context_text" or params["architecture"]=="baseline":
                 new_input=torch.cat((context_input,candidate_input),dim=2)
@@ -288,6 +289,11 @@ def main(params):
                     fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp_with_som"))
                 else:
                     fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp_with_som", i))
+            elif params["architecture"] == "mlp_with_som_finetuning":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp_with_bert"))
+                else:
+                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp_with_bert", i))
         if i == 0:
             train_data = torch.load(fname,  map_location=torch.device('cpu'))
             # train_data = torch.load(fname)
@@ -318,6 +324,8 @@ def main(params):
         reranker = SOMRanker(params)
     elif params["architecture"] == "baseline":
         reranker = CrossEncoderRanker(params)
+    elif params["architecture"] == "mlp_with_som_finetuning":
+        reranker = MlpwithBiEncoderRanker(params)
     else:
         reranker = CrossEncoderRanker(params)
     tokenizer = reranker.tokenizer
@@ -352,8 +360,8 @@ def main(params):
         each_file_path_and_gen_time = []
         ## Getting newest file
         for each_file_name in os.listdir(folder_path):
-            if each_file_name[0]=="e":
-                each_file_path = folder_path + each_file_name
+            each_file_path = folder_path + each_file_name
+            if os.path.isfile(each_file_path):
                 each_file_gen_time = os.path.getctime(each_file_path)
                 each_file_path_and_gen_time.append(
                     (each_file_path, each_file_gen_time)
@@ -377,6 +385,9 @@ def main(params):
             json.dump(params, outfile)
     if not os.path.exists(model_output_path):
         os.makedirs(model_output_path)
+    if not os.path.exists(params["output_path"]+params["architecture"]+"/"+run.id+"/Epochs"): 
+        os.makedirs(params["output_path"]+params["architecture"]+"/"+run.id+"/Epochs")
+
     logger = utils.get_logger(params["output_path"])
     # utils.save_model(model, tokenizer, model_output_path)
 
@@ -457,14 +468,19 @@ def main(params):
                     fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("mlp", i))
             elif params["architecture"] == "som":
                 if train_split == 1:
-                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp_with_som"))
+                    fname = os.path.join(params["data_path"], "valid_{}.t7".format("mlp_with_som"))
                 else:
-                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp_with_som", i))
+                    fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("mlp_with_som", i))
             elif params["architecture"] == "baseline":
                 if train_split == 1:
-                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp_with_bert"))
+                    fname = os.path.join(params["data_path"], "valid_{}.t7".format("mlp_with_bert"))
                 else:
-                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp_with_bert", i))
+                    fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("mlp_with_bert", i))
+            elif params["architecture"] == "mlp_with_som_finetuning":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "valid_{}.t7".format("mlp_with_bert"))
+                else:
+                    fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("mlp_with_bert", i))
 
         if i == 0:
             valid_data = torch.load(fname)
@@ -558,7 +574,7 @@ def main(params):
     if params["architecture"] in scheduler_architecture:
         # when training resumes, use scheduler.step() multiple times to get aligned with previous run
         optimizer.step()
-        for i in range(int(len(train_tensor_data) / params["train_batch_size"] / params["gradient_accumulation_steps"]) * epoch_idx_global + previous_step):
+        for i in range(int(len(train_tensor_data) / params["train_batch_size"] / params["gradient_accumulation_steps"]) * epoch_idx_global + int(previous_step / params["gradient_accumulation_steps"])):
             scheduler.step()
     best_epoch_idx = -1
     best_score = -1
@@ -651,9 +667,6 @@ def main(params):
                 if params["architecture"] in scheduler_architecture:
                     scheduler.step()
                 optimizer.zero_grad()
- #               for i, param in enumerate(list(reranker.named_parameters())):
-  #                  print(param)
-  #                  print(list(reranker.parameters())[i].grad)
             if not step % params["save_interval"] and params["save"]:
                 logger.info("***** Saving fine - tuned model to {}*****".format(model_output_path))
                 epoch_output_folder_path = os.path.join(
@@ -689,23 +702,18 @@ def main(params):
                 #         os.remove(each_file_path)
 
         # utils.save_model(model, tokenizer, epoch_output_folder_path)
-
-        if params["architecture"]=="mlp":
-            logger.info("Loss on the validation dataset")
-            model.eval()
-            for step, batch in enumerate(iter_valid):
-                batch = tuple(t.to(device) for t in batch)
-                context_input = batch[0]    
-                label_input = batch[1]
-                
-                world = batch[2]
-                idxs = batch[3]
-                context_input = modify(context_input, candidate_input_valid, params, world, idxs, mode = "valid", wo64 = params["without_64"])
-                val_loss, _ = reranker(context_input, label_input, context_length)
-                            # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
-                val_loss_sum += val_loss.item()
-                
-                    
+        epoch_output_folder_path = os.path.join(
+        model_output_path, "Epochs/epoch_{}".format(epoch_idx)
+        )
+        logger.info("***** Saving fine - tuned model to {}*****".format(epoch_output_folder_path))
+        torch.save({
+        'epoch': epoch_idx,
+        'model_state_dict': reranker.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'step': step,
+        }, epoch_output_folder_path)
+        folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"],run.id)
+        if params["architecture"]=="mlp":             
             logger.info(
                 "epoch {} average validation loss: {}\n".format(
                     epoch_idx,

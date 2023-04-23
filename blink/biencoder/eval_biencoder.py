@@ -140,6 +140,7 @@ def encode_candidate(
                 logger,
                 is_zeshel=False
             )
+            
             cand_encode_dict[src] = cand_pool_encode
             cand_cls_dict[src]= cand_pool_cls
             cand_encode_late_interaction_dict[src]= cand_encode_late_interaction

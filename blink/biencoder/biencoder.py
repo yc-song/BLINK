@@ -35,19 +35,22 @@ class BiEncoderModule(torch.nn.Module):
             config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
             ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
             cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
-        ctxt_bert = BertModel.from_pretrained(params["bert_model"])
-        cand_bert = BertModel.from_pretrained(params['bert_model'])
+        else:
+            ctxt_bert = BertModel.from_pretrained(params["bert_model"])
+            cand_bert = BertModel.from_pretrained(params['bert_model'])
         ctxt_bert.resize_token_embeddings(len(tokenizer))
         cand_bert.resize_token_embeddings(len(tokenizer))
         self.context_encoder = BertEncoder(
             ctxt_bert,
             params["out_dim"],
+            tokenizer = tokenizer,
             layer_pulled=params["pull_from_layer"],
             add_linear=params["add_linear"],
         )
         self.cand_encoder = BertEncoder(
             cand_bert,
             params["out_dim"],
+            tokenizer = tokenizer,
             layer_pulled=params["pull_from_layer"],
             add_linear=params["add_linear"],
         )
@@ -97,19 +100,17 @@ class BiEncoderRanker(torch.nn.Module):
             self.tokenizer = BertTokenizer.from_pretrained(
 			"bert-base-uncased", do_lower_case=True
 		)
-        if not params["anncur"]:
-            special_tokens_dict = {
-                "additional_special_tokens": [
-                    ENT_START_TAG,
-                    ENT_END_TAG,
-                    ENT_TITLE_TAG,
-                ],
-            }
-            self.tokenizer.add_special_tokens(special_tokens_dict)
+        special_tokens_dict = {
+            "additional_special_tokens": [
+                ENT_START_TAG,
+                ENT_END_TAG,
+                ENT_TITLE_TAG,
+            ],
+        }
+        self.tokenizer.add_special_tokens(special_tokens_dict)
+        self.START_TOKEN = self.tokenizer.cls_token
 
-            self.START_TOKEN = self.tokenizer.cls_token
-
-            self.END_TOKEN = self.tokenizer.sep_token
+        self.END_TOKEN = self.tokenizer.sep_token
         self.NULL_IDX = self.tokenizer.pad_token_id
         # init model
         self.build_model()

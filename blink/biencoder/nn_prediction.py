@@ -98,12 +98,13 @@ def get_topk_predictions(
         ) #scores: (batch_size, each_world_size)
         values, indicies = scores.topk(top_k)
         old_src = src
+
         for i in range(context_input.size(0)):
             oid += 1
             inds = indicies[i]
             value = values[i]
-            if srcs[i] != old_src:
-                src = srcs[i].item()
+            src = srcs[i].item()
+            if src != old_src:
                 # not the same domain, need to re-do
                 new_scores, _, _ = reranker.score_candidate(
                     context_input[[i]], 
@@ -120,32 +121,6 @@ def get_topk_predictions(
                     pointer = j
                     break
             stats[src].add(pointer)
-# Speical tokens
-            # if params["mode"] != "train":
-            #     if pointer == -1:
-            #         pointer = j + 1
-            #         cand_encode_list[srcs[i].item()]=cand_encode_list[srcs[i].item()].to(device)
-            #         cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
-            #         cur_candidates=torch.cat((cur_candidates,cand_encode_list[srcs[i].item()][label_ids[i]]), dim=0) #(65,1024)
-            #         if params["architecture"] == "raw_context_text":
-            #             nn_context.append(context_input[i].cpu().tolist())#(1024)
-            #         else:
-            #             nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
-
-            #     else:
-            #         cand_encode_list[srcs[i].item()]=cand_encode_list[srcs[i].item()].to(device)
-            #         cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
-            #         if params["architecture"] == "raw_context_text":
-            #             nn_context.append(context_input[i].cpu().tolist())#(1024)
-            #         else:
-            #             nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
-            #         if params["bert_model"]=="bert-large-uncased":
-            #             cur_candidates=torch.cat((cur_candidates,torch.rand((1, 1024), device=device)), dim=0) #(65,1024)
-            #         elif params["bert_model"]=="bert-base-cased":
-            #             cur_candidates=torch.cat((cur_candidates,torch.rand((1, 768), device=device)), dim=0) #(65,1024)
-                
-            #     # nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
-
             if pointer == -1:
                 continue
 

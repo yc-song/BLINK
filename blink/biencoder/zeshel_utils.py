@@ -66,12 +66,11 @@ def load_entity_dict_zeshel(logger, params):
 class Stats():
     def __init__(self, top_k=1000):
         self.cnt = 0
-        self.hits = []
-        self.top_k = top_k
         self.rank = [1, 4, 8, 16, 32, 64, 100, 128, 256, 512, 1000]
         self.LEN = len(self.rank) 
-        for i in range(self.LEN):
-            self.hits.append(0)
+        self.hits = [0]*self.LEN
+        self.top_k = top_k
+
 
     def add(self, idx):
         self.cnt += 1
