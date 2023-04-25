@@ -76,16 +76,30 @@ class MlpModel(nn.Module):
         # input shape: (batch size, top_k, 2, bert_hidden_dimension)
         # score shape: (batch_size, top_k)
         if not self.params["sampling"]:
-            if self.params["architecture"] == "mlp_with_bert":
+            if self.params["dot_product"]:
+                context = input[:,:,0,:].reshape(-1, 1, input.size(-1))
+                entity = input[:,:,1,:].reshape(-1, input.size(-1), 1)
+                softmax = nn.Softmax(dim = 1)
+                dot_product = torch.bmm(context, entity).reshape(input.size(0), input.size(1))
+                scores = self.model(input).squeeze(dim = -1)
+                criterion1 = torch.nn.CrossEntropyLoss()
+                loss1=criterion1(scores, label_input)
+                criterion2 = torch.nn.BCEWithLogitsLoss()
+                loss2 = criterion2(softmax(scores), softmax(dot_product))
+                loss = loss1 + loss2
+                
+            else:
+                if self.params["architecture"] == "mlp_with_bert":
 
-                scores=torch.squeeze(self.model(input[:,:,0,:], input[:,:,1,:]), dim=2)
-            else:
-                scores=torch.squeeze(self.model(input), dim=2)
-            if self.params["binary_loss"]:
-                criterion = torch.nn.BCEWithLogitsLoss()
-            else:
-                criterion = torch.nn.CrossEntropyLoss()
-            loss=criterion(scores, label_input)
+                    scores=torch.squeeze(self.model(input[:,:,0,:], input[:,:,1,:]), dim=2)
+                else:
+                    scores=torch.squeeze(self.model(input), dim=2)
+                if self.params["binary_loss"]:
+                    criterion = torch.nn.BCEWithLogitsLoss()
+                else:
+                    criterion = torch.nn.CrossEntropyLoss()
+                
+                loss=criterion(scores, label_input)
         else:    
             if not evaluate:
                 num_samples = self.params["num_samples"] # the number of negative samples

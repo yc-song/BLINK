@@ -315,6 +315,12 @@ class BlinkParser(argparse.ArgumentParser):
             help="The txt file where the the evaluation results will be written.",
         )
         parser.add_argument(
+            "--dot_product",
+            default=config["dot_product"],
+            type=str2bool,
+            help="The txt file where the the evaluation results will be written.",
+        )
+        parser.add_argument(
             "--binary_loss",
             default=config["binary_loss"],
             type=str2bool,

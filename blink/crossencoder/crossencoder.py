@@ -204,7 +204,7 @@ class MlpwithBiEncoderModule(BiEncoderModule):
         if params["architecture"] == "mlp_with_bert":
             self.mlpmodule = MlpModule(self.params).to(self.device)
         elif params["architecture"] == "mlp_with_som_finetuning":
-            self.mlpwithsommodule = MlpwithSOMModuleCosSimilarity(self.params).to(self.device)
+            self.mlpwithsommodule = BiEncoderMlpwithSOMModule(self.params).to(self.device)
             # self.mlpwithsommodule = MlpwithSOMModule(self.params).to(self.device)
         
         if params["anncur"]:
@@ -219,12 +219,14 @@ class MlpwithBiEncoderModule(BiEncoderModule):
         self.context_encoder = BertEncoder(
             ctxt_bert,
             params["out_dim"],
+            tokenizer,
             layer_pulled=params["pull_from_layer"],
             add_linear=params["add_linear"],
         )
         self.cand_encoder = BertEncoder(
             cand_bert,
             params["out_dim"],
+            tokenizer,
             layer_pulled=params["pull_from_layer"],
             add_linear=params["add_linear"],
         )
@@ -251,7 +253,7 @@ class MlpwithBiEncoderModule(BiEncoderModule):
                 elif self.params["bert_model"] == "bert-large-uncased":
                     bert_embedding_size = 1024
                 all_embeddings_ctxt = all_embeddings_ctxt.reshape(-1, self.params["max_context_length"], bert_embedding_size)
-                all_embeddings_cands = all_embeddings_ctxt.reshape(-1, self.params["max_cand_length"], bert_embedding_size)
+                all_embeddings_cands = all_embeddings_cands.reshape(-1, self.params["max_cand_length"], bert_embedding_size)
                 input = torch.stack((all_embeddings_ctxt, all_embeddings_cands), dim = 1)
                 score = self.mlpwithsommodule(input)
             elif self.params["architecture"] == "mlp_with_bert":
@@ -359,32 +361,26 @@ class MlpwithBiEncoderRanker(BiEncoderRanker):
         # Take them as input of MLP layers
         return score.view(-1, num_cand)
 
-class MlpwithSOMModule(nn.Module):
+class BiEncoderMlpwithSOMModule(nn.Module):
     def __init__(self, input_size):
-        super(MlpwithSOMModule, self).__init__()
+        super(BiEncoderMlpwithSOMModule, self).__init__()
         self.input_size = input_size
         self.mlpmodule = MlpModule(self.input_size)
     def forward(self, context):
-        entity = context[:,:,1,:,:]
-        context = context[:,:,0,:,:] #(max_length, embedding_dimension)
+        entity = context[:,1,:,:]
+        context = context[:,0,:,:] #(batch*top_k,max_length, embedding_dimension)
+        mask = torch.tensor(context != 0)[:,:,0]
         batch_size = entity.size(0)
-        top_k = entity.size(1)
-        max_length = entity.size(2)
-        embedding_dimension = entity.size(3)
-        entity = entity.reshape(-1, max_length, embedding_dimension)
-        context = context.reshape(-1, max_length, embedding_dimension)
-        # perform batch-wise dot product using torch.bmm
-        output = torch.bmm(context, entity.transpose(1,2)).squeeze().reshape(batch_size, top_k, max_length, max_length)
-        # reshape the output tensor to have shape (128, 128)
-        output = output.reshape(batch_size, top_k, max_length, max_length)
-        context = context.reshape(batch_size, top_k, max_length, embedding_dimension)
-
-        entity = entity.reshape(batch_size, top_k, max_length, embedding_dimension)
+        max_length = entity.size(1)
+        embedding_dimension = entity.size(2)
+        output = torch.bmm(context, entity.transpose(1,2))
         argmax_values = torch.argmax(output, dim=-1)
-        # print(entity[argmax_values].shape)
-        input = torch.stack([context, torch.gather(entity, dim =2, index = argmax_values.unsqueeze(-1).expand(-1,-1,-1,embedding_dimension))], dim = -2)
-        output = torch.sum(self.mlpmodule(input), -2)
-        return output.squeeze(-1)
+        input = torch.stack([context, torch.gather(entity, dim =1, index = argmax_values.unsqueeze(-1).expand(-1,-1,embedding_dimension))], dim = -2)
+        scores = self.mlpmodule(input).squeeze(-1)
+        scores *= mask
+        output = torch.sum(scores, -1)
+        return output
+    
 
 class MlpwithSOMModuleCosSimilarity(nn.Module):
     def __init__(self, input_size):

@@ -43,14 +43,15 @@ scheduler_architecture = [
     "baseline",
     "raw_context_text",
     "special_token",
-    "som"
+    "som",
+    "mlp_with_som_finetuning"
 ]
 # Below are architectures which causes OOM issue when function modify() is not called appropraitely
 oom_architecture= [
     "mlp_with_som",
     "som",
     "mlp"
-]
+] 
 # mlp_based_architecture and BERT_bsaed_architecture use different optimizer call
 mlp_based_architecture = [
     "mlp",
@@ -97,7 +98,7 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
     else: 
         if params["architecture"] == "mlp_with_som" or params["architecture"] == "som":
             context_input =  context_input.unsqueeze(dim=1).expand(-1,top_k,-1,-1).to(device)
-            new_input = torch.stack((context_input, candidate_input), dim = 2)
+            new_input = torch.stack((context_input, candidate_input), dim = 2   )
         else:
             context_input=context_input.unsqueeze(dim=1).expand(-1,top_k,-1).to(device)
             if params["architecture"] =="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert"  or params["architecture"]=="mlp_with_som_finetuning":
@@ -713,7 +714,17 @@ def main(params):
         'step': step,
         }, epoch_output_folder_path)
         folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"],run.id)
-        if params["architecture"]=="mlp":             
+        if params["architecture"]=="mlp":   
+            model.eval()
+            for step, batch in enumerate(iter_valid):
+                batch = tuple(t.to(device) for t in batch)
+                context_input = batch[0] 
+                label_input = batch[1]
+                idxs = batch[3]
+                context_input = modify(context_input, candidate_input_valid, params, world, idxs, mode = "valid", wo64 = params["without_64"])
+                val_loss, _ = reranker(context_input, label_input, context_length)
+                            # if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
+                val_loss_sum += val_loss.item()          
             logger.info(
                 "epoch {} average validation loss: {}\n".format(
                     epoch_idx,
