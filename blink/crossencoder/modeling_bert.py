@@ -28,9 +28,10 @@ import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
 
-from pytorch_transformers.modeling_utils import (WEIGHTS_NAME, CONFIG_NAME, PretrainedConfig, PreTrainedModel,
-                             prune_linear_layer, add_start_docstrings)
-
+from transformers.modeling_utils import (PretrainedConfig, PreTrainedModel,
+                             prune_linear_layer)
+CONFIG_NAME = "config.json"
+WEIGHTS_NAME = "pytorch_model.bin"
 logger = logging.getLogger(__name__)
 
 BERT_PRETRAINED_MODEL_ARCHIVE_MAP = {

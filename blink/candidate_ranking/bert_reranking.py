@@ -8,19 +8,19 @@ import torch
 import os
 import numpy as np
 
-from pytorch_transformers.modeling_bert import (
+from transformers.modeling_bert import (
     BertPreTrainedModel,
     BertConfig,
     BertModel,
 )
-from pytorch_transformers.tokenization_bert import BertTokenizer
+from transformers.tokenization_bert import BertTokenizer
 from torch.utils.data import DataLoader, SequentialSampler, TensorDataset
 from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
 from tqdm import tqdm
 
-from pytorch_transformers.optimization import AdamW, WarmupLinearSchedule
-from pytorch_transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
+from transformers.optimization import AdamW, get_linear_schedule_with_warmup
+from transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 
 
 class BertForReranking(BertPreTrainedModel):
@@ -268,10 +268,10 @@ class BertReranker:
             correct_bias=False,
         )
 
-        scheduler = WarmupLinearSchedule(
+        scheduler = get_linear_schedule_with_warmup(
             optimizer,
-            warmup_steps=num_warmup_steps,
-            t_total=num_train_optimization_steps,
+            num_warmup_steps,
+            num_train_optimization_steps,
         )
 
         logger.info("  Num optimization steps = %d", num_train_optimization_steps)

@@ -14,7 +14,10 @@ from scipy.stats import rankdata
 import numpy as np
 
 from collections import OrderedDict
-from pytorch_transformers.modeling_utils import CONFIG_NAME, WEIGHTS_NAME
+# CONFIG_NAME = "config.json"
+WEIGHTS_NAME = "pytorch_model.bin"
+CONFIG_NAME = "config.json"
+WEIGHTS_NAME = "pytorch_model.bin"
 from tqdm import tqdm
 
 from blink.candidate_ranking.bert_reranking import BertReranker

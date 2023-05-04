@@ -26,8 +26,8 @@ from collections import OrderedDict
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 
-from pytorch_transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
-from pytorch_transformers.tokenization_bert import BertTokenizer
+from transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
+from transformers.tokenization_bert import BertTokenizer
 
 import blink.candidate_retrieval.utils
 from blink.candidate_ranking.bert_reranking import BertForReranking

@@ -29,32 +29,35 @@ class BertEncoder(nn.Module):
             self.additional_linear = None
 
     def forward(self, token_ids, segment_ids, attention_mask, data_type="context", params = None):
-        output_bert, output_pooler, _ = self.bert_model(
-            token_ids, segment_ids, attention_mask
+        
+        output = self.bert_model(
+            input_ids = token_ids, attention_mask = attention_mask, token_type_ids = segment_ids
         )
+        all_embeddings = output[0]
+        cls_token = output[0][:,0,:]
         # get embedding of [M_s] and [ENT] token (context: token_id=1, candidate: token_id=2)
-        all_embeddings = None
-        m_s_token_id = self.tokenizer.encode(ENT_START_TAG)[0]
-        ent_token_id = self.tokenizer.encode(ENT_TITLE_TAG)[0]
-        if (data_type =="context"):
-            m_s_index=(token_ids==m_s_token_id).nonzero(as_tuple=True)[1]
-        elif (data_type=="candidate"):
-            m_s_index=(token_ids==ent_token_id).nonzero(as_tuple=True)[1]
-        else:
-            raise ValueError
+        # all_embeddings = output_bert
+        # m_s_token_id = self.tokenizer.encode(ENT_START_TAG)[0]
+        # ent_token_id = self.tokenizer.encode(ENT_TITLE_TAG)[0]
+        # if (data_type =="context"):
+        #     m_s_index=(token_ids==m_s_token_id).nonzero(as_tuple=True)[1]
+        # elif (data_type=="candidate"):
+        #     m_s_index=(token_ids==ent_token_id).nonzero(as_tuple=True)[1]
+        # else:
+        #     raise ValueError
+        # if self.additional_linear is not None:
+        #     embeddings = output_pooler
+        # else:
+        #     print("*********")
+        #     print(output_bert)
+        #     embeddings=output_bert[range(output_bert.shape[0]),m_s_index]
+        # # mask = self.mask(token_ids).to(self.device)
+        # # all_embeddings = output_bert*mask
+        # # all_embeddings = torch.nn.functional.normalize(all_embeddings, p = 2, dim = 2)
+        # cls_token=output_bert[:,0,:]
+        # # in case of dimensionality reduction
         if self.additional_linear is not None:
-            embeddings = output_pooler
-        else:
-            embeddings=output_bert[range(output_bert.shape[0]),m_s_index]
-        mask = self.mask(token_ids).to(self.device)
-        all_embeddings = output_bert*mask
-        all_embeddings = torch.nn.functional.normalize(all_embeddings, p = 2, dim = 2)
-        cls_token=output_bert[:,0,:]
-        # in case of dimensionality reduction
-        if self.additional_linear is not None:
-            result = self.additional_linear(self.dropout(embeddings))
-        else:
-            result = embeddings
+            cls_token = self.additional_linear(self.dropout(cls_token))
         return cls_token, cls_token, all_embeddings
     
     def mask(self, token_ids, skiplist = []):

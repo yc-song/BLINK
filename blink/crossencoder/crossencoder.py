@@ -12,7 +12,6 @@ import torch.nn.functional as F
 
 from collections import OrderedDict
 from tqdm import tqdm
-from transformers.modeling_utils import CONFIG_NAME, WEIGHTS_NAME
 
 from transformers.modeling_bert import (
     BertPreTrainedModel,
@@ -22,13 +21,13 @@ from transformers.modeling_bert import (
 from blink.crossencoder.mlp import (
     MlpModel,
 )
-from transformers.modeling_roberta import (
-    RobertaConfig,
-    RobertaModel,
-)
+# from transformers.modeling_roberta import (
+#     RobertaConfig,
+#     RobertaModel,
+# )
 
 from transformers.tokenization_bert import BertTokenizer
-from transformers.tokenization_roberta import RobertaTokenizer
+# from transformers.tokenization_roberta import RobertaTokenizer
 
 # from blink.common.ranker_base_cross import BertEncoder, get_model_obj
 from blink.common.ranker_base import BertEncoder
@@ -39,6 +38,10 @@ from blink.crossencoder.mlp import MlpModule, MlpModel
 from blink.biencoder.biencoder import BiEncoderModule, BiEncoderRanker
 from blink.crossencoder.parallel import DataParallelModel, DataParallelCriterion
 from parallel import DataParallelModel, DataParallelCriterion
+
+CONFIG_NAME = "config.json"
+WEIGHTS_NAME = "pytorch_model.bin"
+TF_WEIGHTS_NAME = 'model.ckpt'
 def load_crossencoder(params):
     # Init model
     crossencoder = CrossEncoderRanker(params)
@@ -316,9 +319,6 @@ class MlpwithBiEncoderRanker(BiEncoderRanker):
 
     def forward(self, input_idx, label_input, context_len, evaluate = False):
         scores = self.score_candidate(input_idx, context_len)
-        # print(input_idx.shape)
-        # print(scores.shape)
-        # print(label_input.shape)
         loss = F.cross_entropy(scores, label_input, reduction="mean")
         return loss, scores
     def to_bert_input(self, token_idx, null_idx, segment_pos):

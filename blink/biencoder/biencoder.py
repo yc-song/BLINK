@@ -10,13 +10,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
-from pytorch_transformers.modeling_bert import (
+from transformers.modeling_bert import (
     BertPreTrainedModel,
     BertConfig,
     BertModel,
 )
 from collections import OrderedDict
-from pytorch_transformers.tokenization_bert import BertTokenizer
+from transformers.tokenization_bert import BertTokenizer
 
 from blink.common.ranker_base import BertEncoder, get_model_obj
 from blink.common.optimizer import get_bert_optimizer
