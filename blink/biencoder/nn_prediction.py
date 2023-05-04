@@ -36,7 +36,6 @@ def get_topk_predictions(
         iter_ = train_dataloader
     else:
         iter_ = tqdm(train_dataloader)
-
     nn_context = []
     nn_candidates = []
     nn_labels = []
@@ -142,6 +141,7 @@ def get_topk_predictions(
             nn_scores.append(value.tolist())
             nn_labels.append(pointer)
             nn_worlds.append(srcs[i].item()-src_minus)
+
             # if pointer == -1:
             #     # pointer = j + 1
 
@@ -169,6 +169,7 @@ def get_topk_predictions(
         res.extend(stats[src])
 
     logger.info(res.output())
+
     nn_context = torch.FloatTensor(nn_context) # (10000,1024)
     nn_labels = torch.LongTensor(nn_labels)
     nn_idxs = torch.LongTensor(nn_idxs)
@@ -210,7 +211,6 @@ def get_topk_predictions(
             nn_data["candidate_vecs"] = cand_encode_list_tensor.to(device)        
 
         print("candidate", nn_data["candidate_vecs"].shape)
-
 
     if is_zeshel:
         nn_data["worlds"] = torch.LongTensor(nn_worlds)

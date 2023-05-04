@@ -14,6 +14,8 @@ import io
 import random
 import time
 import numpy as np
+import pandas as pd
+import csv
 import sys
 sys.path.append('.')
 from multiprocessing.pool import ThreadPool
@@ -35,11 +37,15 @@ from blink.biencoder.zeshel_utils import DOC_PATH, WORLDS, world_to_id
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import BlinkParser
 from blink.crossencoder.mlp import MlpModel
-import deepspeed
 # from pytorch_lightning.callbacks import EarlyStopping
 import matplotlib.pyplot as plt
 logger = None
-
+raw_data = []
+types = []
+mention = []
+label = []
+bi_prediction = []
+cross_prediction = []
 def modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = True):
     device = torch.device('cuda')
     # get values of candidates first
@@ -115,6 +121,8 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
     all_logits = []
     cnt = 0
     for step, batch in enumerate(iter_):
+        raw_data = {}
+
         if zeshel:
             src = batch[2]
             cnt += 1
@@ -130,6 +138,21 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
             eval_loss, logits = reranker(context_input, label_input, context_length, evaluate = True)
         logits = logits.detach().cpu().numpy()
         label_ids = label_input.cpu().numpy()
+        for i in range(context_input.size(0)):
+            mention.append(reranker.tokenizer.decode(context_input[i][0][0][:].int().tolist()))
+            label.append(reranker.tokenizer.decode(context_input[i][label_ids[i]][1][:].int().tolist()))
+            bi_prediction.append(reranker.tokenizer.decode(context_input[i][0][1][:].int().tolist()))
+            cross_prediction.append(reranker.tokenizer.decode(context_input[i][np.argmax(logits[i])][1][:].int().tolist()))
+            if np.argmax(logits[i]) == label_ids[i]:
+                if 0 == label_ids[i]:
+                    types.append(1)
+                else:
+                    types.append(2)
+            else:
+                if 0 == label_ids[i]:
+                    types.append(3)
+                else:
+                    types.append(4)
         tmp_eval_accuracy, eval_result = utils.accuracy(logits, label_ids)
         
         eval_recall += utils.recall(logits, label_ids)
@@ -288,7 +311,7 @@ def main(params):
         run = wandb.init(project=params["wandb"], config=parser, resume="must", id=params["run_id"])
         print("file loaded:", most_recent_file)
         checkpoint = torch.load(most_recent_file)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        reranker.load_state_dict(checkpoint['model_state_dict'])
         epoch_idx_global = checkpoint['epoch']
         previous_step = checkpoint['step']
     else:
@@ -474,6 +497,16 @@ def main(params):
         train=False,
         wo64=params["without_64"]
     )
+    raw_data = [types, mention, label, bi_prediction, cross_prediction]
+    transposed_data = list(zip(*raw_data))
+    with open('val.csv', 'w', newline='') as file:
+
+        # Create a CSV writer object
+        writer = csv.writer(file)
+
+        # Write each sublist as a row
+        for row in transposed_data:
+            writer.writerow(row)
     wandb.log({
         "acc/val_acc": val_acc["normalized_accuracy"],
         'mrr/val_mrr':val_acc['mrr'],

@@ -185,6 +185,12 @@ class BlinkParser(argparse.ArgumentParser):
             help="mlp, bert, roberta, special_token, raw_context_text, mlp_with_bert",
         )
         parser.add_argument(
+            "--loss_weight",
+            default=config["loss_weight"],
+            type=float,
+            help="multi-task loss weight",
+        )
+        parser.add_argument(
             "--late_interaction",
             default=config["late_interaction"],
             type=str2bool,
@@ -399,6 +405,10 @@ class BlinkParser(argparse.ArgumentParser):
         )
         parser.add_argument(
             "--print_interval", type=int, default=50, 
+            help="Interval of loss printing",
+        )
+        parser.add_argument(
+            "--positional_encoding", type=str2bool, default=config["positional_encoding"], 
             help="Interval of loss printing",
         )
         parser.add_argument(

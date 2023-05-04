@@ -55,8 +55,7 @@ class BertEncoder(nn.Module):
             result = self.additional_linear(self.dropout(embeddings))
         else:
             result = embeddings
-
-        return result, cls_token, all_embeddings
+        return cls_token, cls_token, all_embeddings
     
     def mask(self, token_ids, skiplist = []):
         pad_token_id = self.tokenizer.encode("[PAD]")[0]

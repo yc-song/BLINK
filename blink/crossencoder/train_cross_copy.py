@@ -26,13 +26,13 @@ from pytorch_transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from pytorch_transformers.optimization import WarmupLinearSchedule
 from pytorch_transformers.tokenization_bert import BertTokenizer
 import blink.candidate_retrieval.utils
-from blink.crossencoder.crossencoder import SOMRanker, CrossEncoderRanker, load_crossencoder, MlpwithBiEncoderRanker, MlpwithSOMRanker
+from blink.crossencoder.crossencoder_adapter import SOMRanker, CrossEncoderRanker, load_crossencoder, MlpwithBiEncoderRanker, MlpwithSOMRanker
 import logging
 import wandb
 import blink.candidate_ranking.utils as utils
 import blink.biencoder.data_process as data
 from blink.biencoder.zeshel_utils import DOC_PATH, WORLDS, world_to_id
-from blink.common.optimizer import get_bert_optimizer
+from blink.common.optimizer_copy import get_bert_optimizer
 from blink.common.params import BlinkParser
 from blink.crossencoder.mlp import MlpModel
 # from pytorch_lightning.callbacks import EarlyStopping
@@ -233,13 +233,18 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
     return results
 
 
-def get_optimizer(model, params):
-    return get_bert_optimizer(
-        [model],
-        params["type_optimization"],
-        params["learning_rate"],
-        fp16=params.get("fp16"),
-    )
+def get_optimizer(model, params, architecture = None):
+    if architecture is None:
+        return get_bert_optimizer(
+            [model],
+            params["type_optimization"],
+            params["learning_rate"],
+            fp16=params.get("fp16"),
+        )
+    elif architecture == "mlp":
+        optimizer = optim.AdamW(model.parameters(), weight_decay=params["weight_decay"], lr=params["learning_rate"])
+        return optimizer
+
 
 
 def get_scheduler(params, optimizer, len_train_data, logger, last_epoch = -1):
@@ -263,6 +268,7 @@ def main(params):
     # wandb.init(project=params["wandb"], config=parser, resume="must", id=<original_sweeps_run_id>)
     epoch_idx_global = 0
     previous_step = 0
+    optimizer_mlp = None
         # Fix the random seeds
     seed = params["seed"]
     random.seed(seed)
@@ -352,6 +358,8 @@ def main(params):
         # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=500, factor=0.9, min_lr=0.000001)
     elif params["architecture"] in bert_based_architecture:
         optimizer = get_optimizer(model, params)
+        if params["architecture"] == "mlp_with_bert":
+            optimizer_mlp = get_optimizer(model, params, architecture = "mlp")
         # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
 
 
@@ -567,7 +575,7 @@ def main(params):
     # optimizer = optim.SGD(model.parameters(), momentum=0.9, lr=params["learning_rate"])
     # if params["optimizer"]=="Adam":
     #     optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
-    #     print(optimizer)
+        # print(optimizer)
 
     # elif params["optimizer"]=="SGD":
     #     optimizer = optim.SGD(model.parameters(), momentum=0.9, lr=params["learning_rate"])
@@ -577,6 +585,8 @@ def main(params):
     if params["architecture"] in scheduler_architecture:
         # when training resumes, use scheduler.step() multiple times to get aligned with previous run
         optimizer.step()
+        if optimizer_mlp is not None:
+            optimizer_mlp.step()
         for i in range(int(len(train_tensor_data) / params["train_batch_size"] / params["gradient_accumulation_steps"]) * epoch_idx_global + int(previous_step / params["gradient_accumulation_steps"])):
             scheduler.step()
     best_epoch_idx = -1
@@ -650,8 +660,8 @@ def main(params):
             tr_loss += loss.item()
             
             if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
-                # print("optimizer:", optimizer)
-            
+                print("optimizer", optimizer)
+                print("optimizer", optimizer_mlp)
                 logger.info(
                     "Step {} - epoch {} average training loss: {}\n".format(
                         step,
@@ -687,10 +697,14 @@ def main(params):
                     model.parameters(), params["max_grad_norm"]
                 )
                 optimizer.step()
-
+                optimizer_mlp.step()
                 if params["architecture"] in scheduler_architecture:
                     scheduler.step()
                 optimizer.zero_grad()
+                optimizer_mlp.zero_grad()
+                # print("optimizer:", optimizer)
+                # print("optimizer_mlp:", optimizer_mlp)
+            
             if not step % params["save_interval"] and params["save"]:
                 logger.info("***** Saving fine - tuned model to {}*****".format(model_output_path))
                 epoch_output_folder_path = os.path.join(
@@ -750,6 +764,7 @@ def main(params):
             'optimizer_state_dict': optimizer.state_dict(),
             'step': step,
             }, epoch_output_folder_path)
+
             folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"],run.id)
         if params["architecture"]=="mlp":   
             model.eval()

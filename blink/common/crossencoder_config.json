@@ -19,6 +19,8 @@
 "step_size":100,
 "eval_interval": 200,
 "optimizer": "AdamW",
+"loss_weight": 1,
+"positional_encoding": false,
 "wandb": "BLINK-blink_crossencoder",
 "save": true,
 "dim_red": 512,

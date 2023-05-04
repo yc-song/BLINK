@@ -10,7 +10,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
-from pytorch_lightning import LightningModule
 from pytorch_transformers.modeling_bert import (
     BertPreTrainedModel,
     BertConfig,

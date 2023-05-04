@@ -12,9 +12,9 @@ import torch.nn.functional as F
 
 from collections import OrderedDict
 from tqdm import tqdm
-from transformers.modeling_utils import CONFIG_NAME, WEIGHTS_NAME
-
-from transformers.modeling_bert import (
+from pytorch_transformers.modeling_utils import CONFIG_NAME, WEIGHTS_NAME
+from transformers.adapters import AutoAdapterModel
+from pytorch_transformers.modeling_bert import (
     BertPreTrainedModel,
     BertConfig,
     BertModel,
@@ -22,13 +22,13 @@ from transformers.modeling_bert import (
 from blink.crossencoder.mlp import (
     MlpModel,
 )
-from transformers.modeling_roberta import (
+from pytorch_transformers.modeling_roberta import (
     RobertaConfig,
     RobertaModel,
 )
 
-from transformers.tokenization_bert import BertTokenizer
-from transformers.tokenization_roberta import RobertaTokenizer
+from pytorch_transformers.tokenization_bert import BertTokenizer
+from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 
 # from blink.common.ranker_base_cross import BertEncoder, get_model_obj
 from blink.common.ranker_base import BertEncoder
@@ -208,9 +208,14 @@ class MlpwithBiEncoderModule(BiEncoderModule):
             # self.mlpwithsommodule = MlpwithSOMModule(self.params).to(self.device)
         
         if params["anncur"]:
-            config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
-            ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
-            cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
+            # config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
+            ctxt_bert = AutoAdapterModel.from_pretrained('bert-base-cased')
+            cand_bert = AutoAdapterModel.from_pretrained('bert-base-cased')
+            ctxt_bert.add_adapter('adapter')
+            cand_bert.add_adapter('adapter')
+            ctxt_bert.train_adapter('adapter')
+            cand_bert.train_adapter('adapter')
+
         else:
             ctxt_bert = BertModel.from_pretrained(params["bert_model"])
             cand_bert = BertModel.from_pretrained(params['bert_model'])
@@ -485,7 +490,6 @@ class MlpwithSOMRanker(CrossEncoderRanker):
         else:
             self.model = MlpwithSOMModule(self.params)
     def forward(self, input, label_input, context_length, evaluate = False):
-        num_cand = 64
         if self.params["dot_product"]:
             loss_weight = torch.tensor([self.params["loss_weight"]]).to(self.device)
             softmax = nn.Softmax(dim = 1)
