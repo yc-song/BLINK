@@ -26,7 +26,7 @@ import gc
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 from transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from transformers.optimization import get_linear_schedule_with_warmup
-from transformers.tokenization_bert import BertTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
 import blink.candidate_retrieval.utils
 from blink.crossencoder.crossencoder import SOMRanker, CrossEncoderRanker, load_crossencoder, MlpwithBiEncoderRanker, MlpwithSOMRanker
 import logging
@@ -37,6 +37,8 @@ from blink.biencoder.zeshel_utils import DOC_PATH, WORLDS, world_to_id
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import BlinkParser
 from blink.crossencoder.mlp import MlpModel
+from fuzzywuzzy import fuzz
+from fuzzywuzzy import process
 # from pytorch_lightning.callbacks import EarlyStopping
 import matplotlib.pyplot as plt
 logger = None
@@ -46,8 +48,13 @@ mention = []
 label = []
 bi_prediction = []
 cross_prediction = []
+worlds = []
+bi_ratio = []
+cross_ratio = []
 def modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = True):
-    device = torch.device('cuda')
+    device = torch.device(
+            "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
+        )
     # get values of candidates first
     # candidate_input = candidate_input.to(device)
     candidate_input = candidate_input[idxs.cpu()].to(device)
@@ -78,9 +85,9 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
             new_input = torch.stack((context_input, candidate_input), dim = 2)
         else:
             context_input=context_input.unsqueeze(dim=1).expand(-1,top_k,-1).to(device)
-            if params["architecture"] =="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert" or params["architecture"]=="baseline":
+            if params["architecture"] =="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert":
                 new_input=torch.stack((context_input,candidate_input),dim=2) # shape: (Size, 65, 2, 1024) e.g. (10000, 65, 2 , 1024)
-            elif params["architecture"] == "raw_context_text":
+            elif params["architecture"] == "raw_context_text" or params["architecture"] == "baseline":
                 new_input=torch.cat((context_input,candidate_input),dim=2)
         return new_input
         
@@ -133,26 +140,33 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
             world = batch[2]
             idxs = batch[3]
             context_input = modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = params["without_64"])
-
         with torch.no_grad():
             eval_loss, logits = reranker(context_input, label_input, context_length, evaluate = True)
         logits = logits.detach().cpu().numpy()
         label_ids = label_input.cpu().numpy()
-        for i in range(context_input.size(0)):
-            mention.append(reranker.tokenizer.decode(context_input[i][0][0][:].int().tolist()))
-            label.append(reranker.tokenizer.decode(context_input[i][label_ids[i]][1][:].int().tolist()))
-            bi_prediction.append(reranker.tokenizer.decode(context_input[i][0][1][:].int().tolist()))
-            cross_prediction.append(reranker.tokenizer.decode(context_input[i][np.argmax(logits[i])][1][:].int().tolist()))
-            if np.argmax(logits[i]) == label_ids[i]:
-                if 0 == label_ids[i]:
-                    types.append(1)
+        if params["architecture"] == "mlp_with_bert":
+            for i in range(context_input.size(0)):
+                mention.append(reranker.tokenizer.decode(context_input[i][0][0][:].int().tolist()))
+                label.append(reranker.tokenizer.decode(context_input[i][label_ids[i]][1][:].int().tolist()))
+                bi_prediction.append(reranker.tokenizer.decode(context_input[i][0][1][:].int().tolist()))
+                cross_prediction.append(reranker.tokenizer.decode(context_input[i][np.argmax(logits[i])][1][:].int().tolist()))
+                worlds.append(world[i].item())
+                if np.argmax(logits[i]) == label_ids[i]:
+                    if 0 == label_ids[i]:
+                        types.append(1)
+                    else:
+                        types.append(2)
                 else:
-                    types.append(2)
-            else:
-                if 0 == label_ids[i]:
-                    types.append(3)
-                else:
-                    types.append(4)
+                    if 0 == label_ids[i]:
+                        types.append(3)
+                    else:
+                        if context_input[i][0][1][:].int().tolist() == context_input[i][np.argmax(logits[i])][1][:].int().tolist():
+                            types.append(4)
+                        elif context_input[i][0][1][:].int().tolist() != context_input[i][np.argmax(logits[i])][1][:].int().tolist():
+                            types.append(5)
+                bi_ratio.append(fuzz.ratio(label[-1], bi_prediction[-1]))
+                cross_ratio.append(fuzz.ratio(label[-1], cross_prediction[-1]))
+                
         tmp_eval_accuracy, eval_result = utils.accuracy(logits, label_ids)
         
         eval_recall += utils.recall(logits, label_ids)
@@ -260,6 +274,11 @@ def main(params):
                     fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp_with_som"))
                 else:
                     fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp_with_som", i))
+            elif params["architecture"] == "baseline":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp_with_bert"))
+                else:
+                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp_with_bert", i))
         if i == 0:
             train_data = torch.load(fname,  map_location=torch.device('cpu'))
             # train_data = torch.load(fname)
@@ -308,7 +327,7 @@ def main(params):
                     (each_file_path, each_file_gen_time)
                 )
         most_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[0]
-        run = wandb.init(project=params["wandb"], config=parser, resume="must", id=params["run_id"])
+        run = wandb.init(project=params["wandb"], config=parser, resume="must", id=["run_id"])
         print("file loaded:", most_recent_file)
         checkpoint = torch.load(most_recent_file)
         reranker.load_state_dict(checkpoint['model_state_dict'])
@@ -386,12 +405,17 @@ def main(params):
                     fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("mlp", i))
             elif params["architecture"] == "som":
                 if train_split == 1:
-                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp_with_som"))
+                    fname = os.path.join(params["data_path"], "valid_{}.t7".format("mlp_with_som"))
                 else:
-                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp_with_som", i))
+                    fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("mlp_with_som", i))
+            elif params["architecture"] == "baseline":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "valid_{}.t7".format("mlp_with_bert"))
+                else:
+                    fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("mlp_with_bert", i))
 
         if i == 0:
-            valid_data = torch.load(fname)
+            valid_data = torch.load(fname, map_location = torch.device('cpu'))
             context_input = valid_data["context_vecs"][:params["valid_size"]]
             candidate_input_valid = valid_data["candidate_vecs"]
             idxs = valid_data["indexes"][:params["valid_size"]]
@@ -497,21 +521,22 @@ def main(params):
         train=False,
         wo64=params["without_64"]
     )
-    raw_data = [types, mention, label, bi_prediction, cross_prediction]
-    transposed_data = list(zip(*raw_data))
-    with open('val.csv', 'w', newline='') as file:
+    if params["architecture"] == "mlp_with_bert":
+        raw_data = [types, worlds, mention, label, bi_prediction, cross_prediction, bi_ratio, cross_ratio]
+        transposed_data = list(zip(*raw_data))
+        with open('val.csv', 'w', newline='') as file:
 
-        # Create a CSV writer object
-        writer = csv.writer(file)
+            # Create a CSV writer object
+            writer = csv.writer(file)
 
-        # Write each sublist as a row
-        for row in transposed_data:
-            writer.writerow(row)
-    wandb.log({
-        "acc/val_acc": val_acc["normalized_accuracy"],
-        'mrr/val_mrr':val_acc['mrr'],
-        "recall/val_recall":val_acc["recall"],
-        })
+            # Write each sublist as a row
+            for row in transposed_data:
+                writer.writerow(row)
+        wandb.log({
+            "acc/val_acc": val_acc["normalized_accuracy"],
+            'mrr/val_mrr':val_acc['mrr'],
+            "recall/val_recall":val_acc["recall"],
+            })
 
     number_of_samples_per_dataset = {}
 
@@ -562,9 +587,14 @@ def main(params):
                     fname = os.path.join(params["data_path"], "test_{}_{}.t7".format("mlp", i))
             elif params["architecture"] == "som":
                 if train_split == 1:
-                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp_with_som"))
+                    fname = os.path.join(params["data_path"], "test_{}.t7".format("mlp_with_som"))
                 else:
-                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp_with_som", i))
+                    fname = os.path.join(params["data_path"], "test_{}_{}.t7".format("mlp_with_som", i))
+            elif params["architecture"] == "baseline":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "test_{}.t7".format("mlp_with_bert"))
+                else:
+                    fname = os.path.join(params["data_path"], "test_{}_{}.t7".format("mlp_with_bert", i))
         if i == 0:
             test_data = torch.load(fname)
             context_input = test_data["context_vecs"][:params["test_size"]]

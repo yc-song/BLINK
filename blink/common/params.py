@@ -120,7 +120,13 @@ class BlinkParser(argparse.ArgumentParser):
             "--with_mlp", action="store_true", help="Whether to add mlp layers on top of Bi-encoder."
         )
         parser.add_argument(
-            "--anncur", action="store_true", help="Whether to add mlp layers on top of Bi-encoder."
+            "--bert_lr", default= config["bert_lr"], type= float,  help="Bi-encoder lr."
+        )
+        parser.add_argument(
+            "--anncur", action="store_true", help="load anncur checkpoint or not."
+        )
+        parser.add_argument(
+            "--adapter", action="store_true", help="use adapter for training or not."
         )
         parser.add_argument(
             "--act_fn",

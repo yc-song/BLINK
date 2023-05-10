@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, Tenso
 from transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers import get_constant_schedule_with_warmup
-from transformers.tokenization_bert import BertTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
 
 import blink.candidate_retrieval.utils
 from blink.crossencoder.crossencoder import CrossEncoderRanker, load_crossencoder

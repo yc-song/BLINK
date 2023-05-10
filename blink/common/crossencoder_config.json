@@ -46,5 +46,6 @@
 "valid_split": 1,
 "test_split": 1,
 "late_interaction": false,
-"dot_product": false
+"dot_product": false,
+"bert_lr": 1e-4
 }

@@ -10,13 +10,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
-from transformers.modeling_bert import (
+from transformers.models.bert.modeling_bert import (
     BertPreTrainedModel,
     BertConfig,
     BertModel,
 )
 from collections import OrderedDict
-from transformers.tokenization_bert import BertTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
 
 from blink.common.ranker_base import BertEncoder, get_model_obj
 from blink.common.optimizer import get_bert_optimizer
@@ -30,8 +30,11 @@ def load_biencoder(params):
 class BiEncoderModule(torch.nn.Module):
     def __init__(self, params, tokenizer):
         super(BiEncoderModule, self).__init__()
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
+        )
         if params["anncur"]:
-            config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
+            config = BertConfig.from_pretrained(params["bert_model"], output_hidden_states=True)
             ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
             cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
         else:
@@ -59,12 +62,19 @@ class BiEncoderModule(torch.nn.Module):
     def forward(
         self,
         token_idx_ctxt,
-        segment_idx_ctxt,
-        mask_ctxt,
-        token_idx_cands,
-        segment_idx_cands,
-        mask_cands,
+        segment_idx_ctxt = None,
+        mask_ctxt = None,
+        token_idx_cands = None,
+        segment_idx_cands = None,
+        mask_cands = None,
     ):
+        if token_idx_cands is None:
+            print("*** For Evaluation Purpose ***")
+            token_idx_cands = torch.randint(1, 3, (64, 128)).to(self.device)
+            segment_idx_ctxt = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
+            segment_idx_cands = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
+            mask_ctxt = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
+            mask_cands = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
         embedding_ctxt = None
         cls_ctxt=None
         embedding_late_interaction_ctxt = None
@@ -134,7 +144,7 @@ class BiEncoderRanker(torch.nn.Module):
                 elif k.startswith('model.label_encoder'):
                     name = k.replace('model.label_encoder', 'cand_encoder')
                 new_state_dict[name] = v
-            self.model.load_state_dict(new_state_dict)
+            self.model.load_state_dict(new_state_dict, strict = False)
 
         else:
             if cpu:

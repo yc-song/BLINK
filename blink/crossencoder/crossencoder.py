@@ -12,22 +12,26 @@ import torch.nn.functional as F
 
 from collections import OrderedDict
 from tqdm import tqdm
-
-from transformers.modeling_bert import (
-    BertPreTrainedModel,
-    BertConfig,
-    BertModel,
-)
+CONFIG_NAME = "config.json"
+WEIGHTS_NAME = "pytorch_model.bin"
+from transformers.adapters.models.bert.adapter_model import BertAdapterModel
+from transformers.adapters import BertAdapterModel, AutoAdapterModel
+# from transformers.models.bert.modeling_bert import (
+#     BertPreTrainedModel,
+#     BertConfig,
+#     BertModel,
+# )
+from transformers import BertConfig, BertModel, BertPreTrainedModel
 from blink.crossencoder.mlp import (
     MlpModel,
 )
-# from transformers.modeling_roberta import (
+# from pytorch_transformers.modeling_roberta import (
 #     RobertaConfig,
 #     RobertaModel,
 # )
 
-from transformers.tokenization_bert import BertTokenizer
-# from transformers.tokenization_roberta import RobertaTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
+# from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 
 # from blink.common.ranker_base_cross import BertEncoder, get_model_obj
 from blink.common.ranker_base import BertEncoder
@@ -39,9 +43,6 @@ from blink.biencoder.biencoder import BiEncoderModule, BiEncoderRanker
 from blink.crossencoder.parallel import DataParallelModel, DataParallelCriterion
 from parallel import DataParallelModel, DataParallelCriterion
 
-CONFIG_NAME = "config.json"
-WEIGHTS_NAME = "pytorch_model.bin"
-TF_WEIGHTS_NAME = 'model.ckpt'
 def load_crossencoder(params):
     # Init model
     crossencoder = CrossEncoderRanker(params)
@@ -50,6 +51,9 @@ def load_crossencoder(params):
 class CrossEncoderModule(torch.nn.Module):
     def __init__(self, params, tokenizer):
         super(CrossEncoderModule, self).__init__()
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
+        )
         model_path = params["bert_model"]
         if params.get("roberta"):
             encoder_model = RobertaModel.from_pretrained(model_path)
@@ -58,13 +62,17 @@ class CrossEncoderModule(torch.nn.Module):
         elif params["architecture"] == "raw_context_text":
             encoder_model = RawTextBertModel.from_pretrained(model_path)
             encoder_model.params=params
-        elif params["architecture"] == "baseline" or params["architecture"] == "mlp_with_bert":
+        elif params["architecture"] == "baseline":
+            config = BertConfig.from_pretrained(model_path, output_hidden_states=True)
+            encoder_model = BertModel.from_pretrained(model_path, config = config)
+        elif params["architecture"] == "mlp_with_bert":
             encoder_model = BertModel.from_pretrained(model_path)
         encoder_model.resize_token_embeddings(len(tokenizer))
         if params["architecture"] == "baseline":
             self.encoder = BertEncoder(
                 encoder_model,
                 params["out_dim"],
+                tokenizer,
                 layer_pulled=params["pull_from_layer"],
                 add_linear=params["add_linear"],
             )
@@ -74,15 +82,23 @@ class CrossEncoderModule(torch.nn.Module):
             self.encoder = BertEncoder(
                 encoder_model,
                 params["out_dim"],
+                tokenizer,
                 layer_pulled=params["pull_from_layer"],
                 add_linear=params["add_linear"],
             )
             self.config = self.encoder.bert_model.config
 
     def forward(
-        self, token_idx_ctxt, segment_idx_ctxt, mask_ctxt,
+        self, token_idx_ctxt, segment_idx_ctxt = None, mask_ctxt = None,
     ):
-        embedding_ctxt = self.encoder(token_idx_ctxt.int(), segment_idx_ctxt.int(), mask_ctxt.int())
+        if segment_idx_ctxt is None:
+            print("*** For Evaluation Purpose ***")
+            segment_idx_ctxt = torch.zeros(token_idx_ctxt.shape).to(self.device)
+        if mask_ctxt is None:
+            print("*** For Evaluation Purpose ***")
+            mask_ctxt = torch.zeros(token_idx_ctxt.shape).to(self.device)
+
+        embedding_ctxt, _, _ = self.encoder(token_idx_ctxt.int(), segment_idx_ctxt.int(), mask_ctxt.int())
         return embedding_ctxt.squeeze(-1)
 
 
@@ -168,7 +184,7 @@ class CrossEncoderRanker(torch.nn.Module):
         embedding_ctxt = self.model(token_idx_ctxt, segment_idx_ctxt, mask_ctxt,)
         # (2080)이 나와야 함
         # check if add_linear true
-        return embedding_ctxt.view(-1, num_cand)
+        return embedding_ctxt.reshape(-1, num_cand)
 
     def forward(self, input_idx, label_input, context_len, evaluate = False):
         scores = self.score_candidate(input_idx, context_len)
@@ -197,9 +213,9 @@ class CrossEncoderRanker(torch.nn.Module):
         # token_idx = token_idx * mask.long()
         return token_idx, segment_idx, mask
 
-class MlpwithBiEncoderModule(BiEncoderModule):
+class MlpwithBiEncoderModule(torch.nn.Module):
     def __init__(self, params, tokenizer):
-        super(MlpwithBiEncoderModule, self).__init__(params, tokenizer)
+        super(MlpwithBiEncoderModule, self).__init__()
         self.params = params
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
@@ -211,9 +227,20 @@ class MlpwithBiEncoderModule(BiEncoderModule):
             # self.mlpwithsommodule = MlpwithSOMModule(self.params).to(self.device)
         
         if params["anncur"]:
-            config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
-            ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
-            cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
+            if params["adapter"]:
+                config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
+                ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
+                cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
+                ctxt_bert.add_adapter('ctxt-bert-adapter')
+                cand_bert.add_adapter('cand-bert-adapter')
+                ctxt_bert.train_adapter('ctxt-bert-adapter')
+                cand_bert.train_adapter('cand-bert-adapter')
+                ctxt_bert.set_active_adapters("ctxt-bert-adapter")
+                cand_bert.set_active_adapters("cand-bert-adapter")
+            else:
+                config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
+                ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
+                cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
         else:
             ctxt_bert = BertModel.from_pretrained(params["bert_model"])
             cand_bert = BertModel.from_pretrained(params['bert_model'])
@@ -237,9 +264,17 @@ class MlpwithBiEncoderModule(BiEncoderModule):
         self.params = params
 
     def forward(
-        self, token_idx_ctxt, segment_idx_ctxt, mask_ctxt, token_idx_cands, segment_idx_cands, mask_cands, num_cand
+        self, token_idx_ctxt, segment_idx_ctxt  = None, mask_ctxt = None, token_idx_cands = None, segment_idx_cands = None, mask_cands = None, num_cand = None
     ):
         # Obtaining BERT embedding of context and candidate from bi-encoder
+        if token_idx_cands is None:
+            print("*** For Evaluation Purpose ***")
+            token_idx_cands = torch.randint(1, 3, (64, 128)).to(self.device)
+            segment_idx_ctxt = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
+            segment_idx_cands = torch.zeros(token_idx_cands.shape).int().to(self.device)
+            mask_ctxt = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
+            mask_cands = torch.zeros(token_idx_cands.shape).int().to(self.device)
+            print(token_idx_ctxt.shape, segment_idx_ctxt.shape, mask_ctxt.shape)
         embedding_ctxt = None
         if token_idx_ctxt is not None:
             embedding_ctxt, cls_ctxt, all_embeddings_ctxt = self.context_encoder(
@@ -266,7 +301,6 @@ class MlpwithBiEncoderModule(BiEncoderModule):
 class MlpwithBiEncoderRanker(BiEncoderRanker): 
     def __init__(self, params, shared=None):
         super(MlpwithBiEncoderRanker, self).__init__(params)
-
         if params["path_to_mlpmodel"] is not None:
             if params["architecture"] == "mlp_with_bert":
                 # print("load mlp")
@@ -319,6 +353,9 @@ class MlpwithBiEncoderRanker(BiEncoderRanker):
 
     def forward(self, input_idx, label_input, context_len, evaluate = False):
         scores = self.score_candidate(input_idx, context_len)
+        # print(input_idx.shape)
+        # print(scores.shape)
+        # print(label_input.shape)
         loss = F.cross_entropy(scores, label_input, reduction="mean")
         return loss, scores
     def to_bert_input(self, token_idx, null_idx, segment_pos):
@@ -485,7 +522,6 @@ class MlpwithSOMRanker(CrossEncoderRanker):
         else:
             self.model = MlpwithSOMModule(self.params)
     def forward(self, input, label_input, context_length, evaluate = False):
-        num_cand = 64
         if self.params["dot_product"]:
             loss_weight = torch.tensor([self.params["loss_weight"]]).to(self.device)
             softmax = nn.Softmax(dim = 1)

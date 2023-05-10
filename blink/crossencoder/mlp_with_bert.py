@@ -3,7 +3,7 @@ from torch import nn, optim
 import torch.nn.functional as F
 import os
 from pytorch_transformers import PreTrainedModel, PretrainedConfig
-from transformers.modeling_bert import (
+from transformers.models.bert.modeling_bert import (
     BertPreTrainedModel,
     BertConfig,
     BertModel,
@@ -11,7 +11,7 @@ from transformers.modeling_bert import (
 import sys
 sys.path.append('/mnt/f/BLINK')
 from blink.common.ranker_base import get_model_obj
-from transformers.tokenization_bert import BertTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
 # from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from blink.common.params import BlinkParser
 

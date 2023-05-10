@@ -23,7 +23,7 @@ from blink.biencoder.data_process import (
     process_mention_data,
     get_candidate_representation,
 )
-from transformers.tokenization_bert import BertTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
 import blink.candidate_ranking.utils as utils
 from blink.crossencoder.train_cross import modify, evaluate
 from blink.crossencoder.data_process import prepare_crossencoder_data

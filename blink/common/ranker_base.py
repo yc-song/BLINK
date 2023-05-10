@@ -29,7 +29,6 @@ class BertEncoder(nn.Module):
             self.additional_linear = None
 
     def forward(self, token_ids, segment_ids, attention_mask, data_type="context", params = None):
-        
         output = self.bert_model(
             input_ids = token_ids, attention_mask = attention_mask, token_type_ids = segment_ids
         )

@@ -15,7 +15,7 @@ import sys
 sys.path.append('.')
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 
-from transformers.tokenization_bert import BertTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
 
 from blink.biencoder.biencoder import BiEncoderRanker
 import blink.biencoder.data_process as data

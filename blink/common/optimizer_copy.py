@@ -8,12 +8,12 @@ import torch
 import os
 import numpy as np
 
-from transformers.modeling_bert import (
+from transformers.models.bert.modeling_bert import (
     BertPreTrainedModel,
     BertConfig,
     BertModel,
 )
-from transformers.tokenization_bert import BertTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
 from torch import nn
 
 from transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE

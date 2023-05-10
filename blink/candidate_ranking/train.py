@@ -27,7 +27,7 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, Tenso
 from torch.utils.data.distributed import DistributedSampler
 
 from transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
-from transformers.tokenization_bert import BertTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
 
 import blink.candidate_retrieval.utils
 from blink.candidate_ranking.bert_reranking import BertForReranking

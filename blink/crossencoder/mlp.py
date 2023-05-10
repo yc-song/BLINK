@@ -3,7 +3,7 @@ from torch import nn, optim
 import torch.nn.functional as F
 import os
 # from pytorch_transformers import PreTrainedModel, PretrainedConfig
-from transformers.modeling_bert import (
+from transformers.models.bert.modeling_bert import (
     BertPreTrainedModel,
     BertConfig,
     BertModel,
@@ -11,7 +11,7 @@ from transformers.modeling_bert import (
 import sys
 sys.path.append('/mnt/f/BLINK')
 from blink.common.ranker_base import get_model_obj
-from transformers.tokenization_bert import BertTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
 # from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from blink.common.params import BlinkParser
 from blink.common.params import ENT_START_TAG, ENT_END_TAG, ENT_TITLE_TAG
@@ -171,7 +171,8 @@ class MlpModule(nn.Module):
         self.device=torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )
-        self.PositionalEncoding = PositionalEncoding(self.input_size//2, 2, self.device)
+        self.positional_encoding = torch.nn.Parameter(torch.normal(0, 0.1, size=(2,768)).to(self.device))
+        self.positional_encoding.requires_grad = True
         if params["act_fn"] == "softplus":
             self.act_fn = nn.Softplus()
         if params["act_fn"] == "sigmoid":
@@ -198,7 +199,7 @@ class MlpModule(nn.Module):
 
     def forward(self, input):
         if self.params["positional_encoding"]:
-            input += self.PositionalEncoding(input)
+            input += self.positional_encoding
         input = torch.flatten(input, start_dim = -2)
         for i, layer in enumerate(self.layers[:-1]):
             input = self.act_fn(layer(self.dropout(input)))

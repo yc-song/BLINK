@@ -8,12 +8,12 @@ import torch
 import os
 import numpy as np
 
-from transformers.modeling_bert import (
+from transformers.models.bert.modeling_bert import (
     BertPreTrainedModel,
     BertConfig,
     BertModel,
 )
-from transformers.tokenization_bert import BertTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
 from torch import nn
 
 from transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
@@ -41,7 +41,6 @@ def get_bert_optimizer(models, type_optimization, learning_rate, fp16=False):
         print(
             'Error. Type optimizer must be one of %s' % (str(patterns_optimizer.keys()))
         )
-    mlp_layers = ['fc.weight', 'layers']
     parameters_mlp=[]
     parameters_mlp_names=[]
     parameters_with_decay = []
@@ -60,9 +59,7 @@ def get_bert_optimizer(models, type_optimization, learning_rate, fp16=False):
                 else:
                     parameters_with_decay.append(p)
                     parameters_with_decay_names.append(n)
-            if any(t in n for t in mlp_layers):
-                parameters_mlp.append(p)
-                parameters_mlp_names.append(n)
+
 
     print('The following parameters will be optimized WITH decay:')
 
@@ -76,9 +73,8 @@ def get_bert_optimizer(models, type_optimization, learning_rate, fp16=False):
     # print(parameters_without_decay_names)
 
     optimizer_grouped_parameters = [
-        {'params': parameters_with_decay, 'weight_decay': 0.01, 'lr': 2e-5},
-        {'params': parameters_without_decay, 'weight_decay': 0.0, 'lr': 2e-5},
-        {'params': parameters_mlp, 'weight_decay': 0.01}
+        {'params': parameters_with_decay, 'weight_decay': 0.01, 'lr': learning_rate},
+        {'params': parameters_without_decay, 'weight_decay': 0.0, 'lr': learning_rate},
     ]
     optimizer = AdamW(
         optimizer_grouped_parameters, 
@@ -90,7 +86,7 @@ def get_bert_optimizer(models, type_optimization, learning_rate, fp16=False):
     return optimizer
 
 
-def ellipse(lst, max_display=5, sep='|'):
+def ellipse(lst, max_display=30, sep='|'):
     """
     Like join, but possibly inserts an ellipsis.
     :param lst: The list to join on

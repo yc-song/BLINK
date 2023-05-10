@@ -14,12 +14,14 @@ from collections import OrderedDict
 from tqdm import tqdm
 CONFIG_NAME = "config.json"
 WEIGHTS_NAME = "pytorch_model.bin"
-from transformers.adapters import AutoAdapterModel
-from transformers.modeling_bert import (
-    BertPreTrainedModel,
-    BertConfig,
-    BertModel,
-)
+from transformers.adapters.models.bert.adapter_model import BertAdapterModel
+from transformers.adapters import BertAdapterModel, AutoAdapterModel
+# from transformers.models.bert.modeling_bert import (
+#     BertPreTrainedModel,
+#     BertConfig,
+#     BertModel,
+# )
+from transformers import BertConfig, BertModel, BertPreTrainedModel
 from blink.crossencoder.mlp import (
     MlpModel,
 )
@@ -28,7 +30,7 @@ from blink.crossencoder.mlp import (
 #     RobertaModel,
 # )
 
-from transformers.tokenization_bert import BertTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
 # from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 
 # from blink.common.ranker_base_cross import BertEncoder, get_model_obj
@@ -195,9 +197,9 @@ class CrossEncoderRanker(torch.nn.Module):
         # token_idx = token_idx * mask.long()
         return token_idx, segment_idx, mask
 
-class MlpwithBiEncoderModule(BiEncoderModule):
+class MlpwithBiEncoderModule(torch.nn.Module):
     def __init__(self, params, tokenizer):
-        super(MlpwithBiEncoderModule, self).__init__(params, tokenizer)
+        super(MlpwithBiEncoderModule, self).__init__()
         self.params = params
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
@@ -209,13 +211,14 @@ class MlpwithBiEncoderModule(BiEncoderModule):
             # self.mlpwithsommodule = MlpwithSOMModule(self.params).to(self.device)
         
         if params["anncur"]:
-            # config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
-            ctxt_bert = AutoAdapterModel.from_pretrained('bert-base-cased')
-            cand_bert = AutoAdapterModel.from_pretrained('bert-base-cased')
-            ctxt_bert.add_adapter('adapter')
-            cand_bert.add_adapter('adapter')
-            ctxt_bert.train_adapter('adapter')
-            cand_bert.train_adapter('adapter')
+            config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
+            print(config)
+            ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
+            cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
+            ctxt_bert.add_adapter('ctxt-bert-adapter')
+            cand_bert.add_adapter('cand-bert-adapter')
+            ctxt_bert.train_adapter('ctxt-bert-adapter')
+            cand_bert.train_adapter('cand-bert-adapter')
 
         else:
             ctxt_bert = BertModel.from_pretrained(params["bert_model"])
@@ -269,7 +272,6 @@ class MlpwithBiEncoderModule(BiEncoderModule):
 class MlpwithBiEncoderRanker(BiEncoderRanker): 
     def __init__(self, params, shared=None):
         super(MlpwithBiEncoderRanker, self).__init__(params)
-
         if params["path_to_mlpmodel"] is not None:
             if params["architecture"] == "mlp_with_bert":
                 # print("load mlp")
