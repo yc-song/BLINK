@@ -14,8 +14,9 @@ def get_model_obj(model):
 
 class BertEncoder(nn.Module):
     def __init__(
-        self, bert_model, output_dim, tokenizer, layer_pulled=-1, add_linear=None):
+        self, bert_model, output_dim, tokenizer, layer_pulled=-1, add_linear=None, params = None):
         super(BertEncoder, self).__init__()
+        self.params = params
         self.layer_pulled = layer_pulled
         bert_output_dim = bert_model.embeddings.word_embeddings.weight.size(1)
         self.tokenizer = tokenizer
@@ -50,9 +51,10 @@ class BertEncoder(nn.Module):
         #     print("*********")
         #     print(output_bert)
         #     embeddings=output_bert[range(output_bert.shape[0]),m_s_index]
-        # # mask = self.mask(token_ids).to(self.device)
-        # # all_embeddings = output_bert*mask
-        # # all_embeddings = torch.nn.functional.normalize(all_embeddings, p = 2, dim = 2)
+        if self.params["architecture"] == "mlp_with_som":
+            mask = self.mask(token_ids).to(self.device)
+            all_embeddings = all_embeddings*mask
+            all_embeddings = torch.nn.functional.normalize(all_embeddings, p = 2, dim = 2)
         # cls_token=output_bert[:,0,:]
         # # in case of dimensionality reduction
         if self.additional_linear is not None:

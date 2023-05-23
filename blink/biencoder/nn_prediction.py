@@ -93,7 +93,8 @@ def get_topk_predictions(
             context_input, 
             None, 
             cand_encs=cand_encode_list[src],
-            cls_cands=cand_cls_list[src]
+            cls_cands=cand_cls_list[src],
+            embedding_late_interaction_cands = cand_encode_late_interaction[src]
         ) #scores: (batch_size, each_world_size)
         values, indicies = scores.topk(top_k)
         old_src = src
@@ -109,7 +110,8 @@ def get_topk_predictions(
                     context_input[[i]], 
                     None,
                     cand_encs=cand_encode_list[src].to(device),
-                    cls_cands=cand_cls_list[src].to(device)
+                    cls_cands=cand_cls_list[src].to(device),
+                    embedding_late_interaction_cands = cand_encode_late_interaction[src].to(device)
                 )
                 value, inds = new_scores.topk(top_k)
                 inds = inds[0]
@@ -129,7 +131,7 @@ def get_topk_predictions(
             
             if params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
                 nn_context.append(context_input[i].cpu().tolist())#(1024)
-            elif params["architecture"] == "mlp_with_som":
+            elif params["architecture"] == "mlp_with_som" or params["architecture"] == "extend_multi":
                 nn_context.append(embedding_late_interaction_ctxt[i].cpu().tolist())#(1024)
                 # if type(nn_context) is list:
                 #     nn_context = embedding_late_interaction_ctxt

@@ -26,7 +26,8 @@ from transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers.models.bert.tokenization_bert import BertTokenizer
 import blink.candidate_retrieval.utils
-from blink.crossencoder.crossencoder import SOMRanker, CrossEncoderRanker, load_crossencoder, MlpwithBiEncoderRanker, MlpwithSOMRanker
+from blink.crossencoder.crossencoder import SOMRanker, ExtendSingleRanker, ExtendExtensionRanker, ExtendMultiRanker, AdditiveScoreRanker, MultiplicativeScoreRanker, CrossEncoderRanker, load_crossencoder, MlpwithBiEncoderRanker, MlpwithSOMRanker
+from blink.biencoder.biencoder import BiEncoderRanker
 import logging
 import wandb
 import blink.candidate_ranking.utils as utils
@@ -44,18 +45,33 @@ scheduler_architecture = [
     "raw_context_text",
     "special_token",
     "som",
-    "mlp_with_som_finetuning"
+    "mlp_with_som_finetuning",
+    "extend_extension",
+    "extend_multi",
+    "extend_single"
 ]
 # Below are architectures which causes OOM issue when function modify() is not called appropraitely
 oom_architecture= [
     "mlp_with_som",
     "som",
-    "mlp"
+    "mlp",
+    "multiplicative_score",
+    "additive_score",
+    "extend_extension",
+    "extend_multi",
+    "extend_single"
+
 ] 
 # mlp_based_architecture and BERT_bsaed_architecture use different optimizer call
 mlp_based_architecture = [
     "mlp",
-    "mlp_with_som"
+    "mlp_with_som",
+    "multiplicative_score",
+    "additive_score",
+    "extend_extension",
+    "extend_multi",
+    "extend_single"
+
 ]
 bert_based_architecture = [
     "mlp_with_bert",
@@ -99,9 +115,17 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
         if params["architecture"] == "mlp_with_som" or params["architecture"] == "som":
             context_input =  context_input.unsqueeze(dim=1).expand(-1,top_k,-1,-1).to(device)
             new_input = torch.stack((context_input, candidate_input), dim = 2   )
+        elif params["architecture"] == "extend_single":
+            context_input =  context_input.unsqueeze(dim=1).expand(-1,top_k,-1,-1).to(device)
+            new_input = torch.cat((context_input, candidate_input.unsqueeze(-2)), dim = 2  )
+        elif params["architecture"] == "extend_extension":
+            new_input = torch.cat([context_input.unsqueeze(-2), candidate_input], dim = -2) #(Batch size, top_k+1, BERT embedding dimension)
+        elif params["architecture"] == "extend_multi":
+            new_input = torch.cat([context_input, candidate_input], dim = -2) #(Batch size, top_k+1, BERT embedding dimension)
+
         else:
             context_input=context_input.unsqueeze(dim=1).expand(-1,top_k,-1).to(device)
-            if params["architecture"] =="mlp" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert"  or params["architecture"]=="mlp_with_som_finetuning":
+            if params["architecture"] =="mlp" or params["architecture"] =="additive_score" or params["architecture"] =="multiplicative_score" or params["architecture"]=="special_token" or params["architecture"]=="mlp_with_bert"  or params["architecture"]=="mlp_with_som_finetuning":
                 new_input=torch.stack((context_input,candidate_input),dim=2) # shape: (Size, 65, 2, 1024) e.g. (10000, 65, 2 , 1024)
             elif params["architecture"] == "raw_context_text" or params["architecture"]=="baseline":
                 new_input=torch.cat((context_input,candidate_input),dim=2)
@@ -321,6 +345,27 @@ def main(params):
                     fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp_with_bert"))
                 else:
                     fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp_with_bert", i))
+            elif params["architecture"] == "multiplicative_score":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp"))
+                else:
+                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp", i))
+            elif params["architecture"] == "additive_score":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp"))
+                else:
+                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp", i))
+            elif params["architecture"] == "extend_extension":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp"))
+                else:
+                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp", i))
+            elif params["architecture"] == "extend_single":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "train_{}.t7".format("extend_multi"))
+                else:
+                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("extend_multi", i))
+
 
         if i == 0:
             train_data = torch.load(fname,  map_location=torch.device('cpu'))
@@ -354,6 +399,16 @@ def main(params):
         reranker = CrossEncoderRanker(params)
     elif params["architecture"] == "mlp_with_som_finetuning":
         reranker = MlpwithBiEncoderRanker(params)
+    elif params["architecture"] == "multiplicative_score":
+        reranker = MultiplicativeScoreRanker(params)
+    elif params["architecture"] == "additive_score":
+        reranker = AdditiveScoreRanker(params)
+    elif params["architecture"] == "extend_extension":
+        reranker = ExtendExtensionRanker(params)
+    elif params["architecture"] == "extend_multi":
+        reranker = ExtendMultiRanker(params)
+    elif params["architecture"] == "extend_single":
+        reranker = ExtendSingleRanker(params)
     else:
         reranker = CrossEncoderRanker(params)
     tokenizer = reranker.tokenizer
@@ -364,10 +419,10 @@ def main(params):
         if params["optimizer"]=="Adam":
             optimizer = optim.Adam(model.parameters(), lr=params["learning_rate"])
         elif params["optimizer"]=="AdamW":
-            optimizer = optim.AdamW(model.parameters(), weight_decay=params["weight_decay"], lr=params["learning_rate"])
+            optimizer = optim.AdamW(model.parameters(), weight_decay=params["weight_decay"], lr=params["learning_rate"], betas = (0.9, 0.98), eps = 1e-9)
 
         elif params["optimizer"]=="SGD":
-            optimizer = optim.SGD(model.parameters(), momentum=0.9, lr=params["learning_rate"])
+            optimizer = optim.SGD(model.parameters(), momentum=0.9, lr=params["learning_rate"], weight_decay=params["weight_decay"])
         elif params["optimizer"]=="RMSprop":
             optimizer = optim.RMSprop(model.parameters(),lr=params["learning_rate"])
         # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params["step_size"], gamma=params["scheduler_gamma"])
@@ -510,6 +565,26 @@ def main(params):
                     fname = os.path.join(params["data_path"], "valid_{}.t7".format("mlp_with_bert"))
                 else:
                     fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("mlp_with_bert", i))
+            elif params["architecture"] == "multiplicative_score":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "valid_{}.t7".format("mlp"))
+                else:
+                    fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("mlp", i))
+            elif params["architecture"] == "additive_score":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "valid_{}.t7".format("mlp"))
+                else:
+                    fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("mlp", i))
+            elif params["architecture"] == "extend_extension":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "valid_{}.t7".format("mlp"))
+                else:
+                    fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("mlp", i))
+            elif params["architecture"] == "extend_single":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "valid_{}.t7".format("extend_multi"))
+                else:
+                    fname = os.path.join(params["data_path"], "valid_{}_{}.t7".format("extend_multi", i))
 
         if i == 0:
             valid_data = torch.load(fname)
@@ -755,7 +830,7 @@ def main(params):
                 #         os.remove(each_file_path)
 
         # utils.save_model(model, tokenizer, epoch_output_folder_path)
-        if params["architecture"] == "mlp" or params["architecture"] == "mlp_with_som":
+        if params["architecture"] == "mlp" or params["architecture"] == "mlp_with_som" or params["architecture"] == "extend_extension" or params["architecture"] == "extend_single" or params["architecture"] == "extend_multi":
             if not epoch_idx % 5:
                 epoch_output_folder_path = os.path.join(
                 model_output_path, "Epochs/epoch_{}".format(epoch_idx)
@@ -961,9 +1036,24 @@ def main(params):
                     fname = os.path.join(params["data_path"], "test_{}_{}.t7".format("mlp", i))
             elif params["architecture"] == "som":
                 if train_split == 1:
-                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp_with_som"))
+                    fname = os.path.join(params["data_path"], "test_{}.t7".format("mlp_with_som"))
                 else:
-                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp_with_som", i))
+                    fname = os.path.join(params["data_path"], "test_{}_{}.t7".format("mlp_with_som", i))
+            elif params["architecture"] == "dot_product":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "test_{}.t7".format("mlp"))
+                else:
+                    fname = os.path.join(params["data_path"], "test_{}_{}.t7".format("mlp", i))
+            elif params["architecture"] == "extend_extension":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "test_{}.t7".format("mlp"))
+                else:
+                    fname = os.path.join(params["data_path"], "test_{}_{}.t7".format("mlp", i))
+            elif params["architecture"] == "extend_single":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "test_{}.t7".format("extend_multi"))
+                else:
+                    fname = os.path.join(params["data_path"], "test_{}_{}.t7".format("extend_multi", i))
         if i == 0:
             test_data = torch.load(fname)
             context_input = test_data["context_vecs"][:params["test_size"]]

@@ -6,9 +6,11 @@
 #
 import os
 import argparse
+import wandb
 import pickle
 import torch
 import json
+from torch import optim
 import sys
 import io
 import random
@@ -84,13 +86,29 @@ def evaluate(
     return results
 
 
-def get_optimizer(model, params):
-    return get_bert_optimizer(
-        [model],
-        params["type_optimization"],
-        params["learning_rate"],
-        fp16=params.get("fp16"),
-    )
+def get_optimizer(model, params, architecture = None):
+    if architecture is None:
+        return get_bert_optimizer(
+            [model],
+            params["type_optimization"],
+            params["bert_lr"],
+            fp16=params.get("fp16"),
+        )
+    elif architecture == "mlp":
+        mlp_layers = ['fc.weight', 'layers']
+        parameters_mlp = []
+        parameters_mlp_names = []
+        for n, p in model.named_parameters():
+            if any(t in n for t in mlp_layers):
+                parameters_mlp.append(p)
+                parameters_mlp_names.append(n)
+        print('The following parameters will be optimized WITH MLP optimizer')
+        print(parameters_mlp_names[:5])
+        optimizer_grouped_parameters = [
+        {'params': parameters_mlp, 'weight_decay': 0.01}
+        ]
+        optimizer = optim.AdamW(optimizer_grouped_parameters, weight_decay=params["weight_decay"], lr=params["learning_rate"])
+        return optimizer
 
 
 def get_scheduler(params, optimizer, len_train_data, logger):
@@ -108,6 +126,8 @@ def get_scheduler(params, optimizer, len_train_data, logger):
 
 
 def main(params):
+    run = wandb.init(project="BLINK-biencoder")
+    folder_path="models/zeshel/biencoder/{}/".format(run.id)
     model_output_path = params["output_path"]
     if not os.path.exists(model_output_path):
         os.makedirs(model_output_path)
@@ -191,6 +211,7 @@ def main(params):
     results = evaluate(
         reranker, valid_dataloader, params, device=device, logger=logger,
     )
+    wandb.log({"accuracy": results["normalized_accuracy"], "epoch": 0})
 
     number_of_samples_per_dataset = {}
 
@@ -207,6 +228,9 @@ def main(params):
 
     optimizer = get_optimizer(model, params)
     scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
+    optimizer_mlp = None
+    if params["classification_head"] == "mlp":
+        optimizer_mlp = get_optimizer(model, params, architecture = "mlp")
 
     model.train()
 
@@ -227,9 +251,9 @@ def main(params):
             batch = tuple(t.to(device) for t in batch)
             context_input, candidate_input, _, _ = batch
             loss, _ = reranker(context_input, candidate_input)
-            for i, param in enumerate(list(reranker.named_parameters())):
-                print(param)
-                print(list(reranker.parameters())[i].grad)
+            # for i, param in enumerate(list(reranker.named_parameters())):
+            #     print(param)
+            #     print(list(reranker.parameters())[i].grad)
             # if n_gpu > 1:
             #     loss = loss.mean() # mean() to average on multi-gpu.
 
@@ -246,8 +270,13 @@ def main(params):
                         tr_loss / (params["print_interval"] * grad_acc_steps),
                     )
                 )
-                tr_loss = 0
+                wandb.log({"train_loss": tr_loss / (params["print_interval"] * grad_acc_steps), "epoch": epoch_idx})
 
+                tr_loss = 0
+            # print("***0****")
+            # for n, p in model.named_parameters():
+            #     if p.grad is not None:
+            #         print(n)
             loss.backward()
 
             if (step + 1) % grad_acc_steps == 0:
@@ -255,14 +284,29 @@ def main(params):
                     model.parameters(), params["max_grad_norm"]
                 )
                 optimizer.step()
+                if optimizer_mlp is not None:
+                    optimizer_mlp.step()
                 scheduler.step()
                 optimizer.zero_grad()
+                # print("***1****")
+                # for n, p in model.named_parameters():
+                #     if "embeddings" in n:
+                #         print(p.requires_grad)
+                #         print(p.grad)
+                if optimizer_mlp is not None:
+                    # print("***2****")
+                    optimizer_mlp.zero_grad()
+                    # for n, p in model.named_parameters():
+                    #     if p.grad is not None:
+                    #         print(n)
+
 
             if (step + 1) % (params["eval_interval"] * grad_acc_steps) == 0:
                 logger.info("Evaluation on the development dataset")
-                evaluate(
+                results = evaluate(
                     reranker, valid_dataloader, params, device=device, logger=logger,
                 )
+                wandb.log({"accuracy": results["normalized_accuracy"], "epoch":epoch_idx})
                 model.train()
                 logger.info("\n")
 
@@ -276,6 +320,7 @@ def main(params):
         results = evaluate(
             reranker, valid_dataloader, params, device=device, logger=logger,
         )
+        wandb.log({"accuracy": results["normalized_accuracy"], "epoch":epoch_idx})
 
         ls = [best_score, results["normalized_accuracy"]]
         li = [best_epoch_idx, epoch_idx]

@@ -21,6 +21,7 @@ from transformers.models.bert.tokenization_bert import BertTokenizer
 from blink.common.ranker_base import BertEncoder, get_model_obj
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import ENT_START_TAG, ENT_END_TAG, ENT_TITLE_TAG
+from blink.crossencoder.mlp import MlpModule, MlpModel
 def load_biencoder(params):
     # Init model
     biencoder = BiEncoderRanker(params)
@@ -33,6 +34,8 @@ class BiEncoderModule(torch.nn.Module):
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
         )
+        if params["classification_head"] == "mlp":
+            self.mlplayer = MlpModule(params).to(self.device)
         if params["anncur"]:
             config = BertConfig.from_pretrained(params["bert_model"], output_hidden_states=True)
             ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
@@ -48,6 +51,7 @@ class BiEncoderModule(torch.nn.Module):
             tokenizer = tokenizer,
             layer_pulled=params["pull_from_layer"],
             add_linear=params["add_linear"],
+            params = params
         )
         self.cand_encoder = BertEncoder(
             cand_bert,
@@ -55,6 +59,7 @@ class BiEncoderModule(torch.nn.Module):
             tokenizer = tokenizer,
             layer_pulled=params["pull_from_layer"],
             add_linear=params["add_linear"],
+            params = params
         )
         self.config = ctxt_bert.config
         self.params = params
@@ -68,13 +73,13 @@ class BiEncoderModule(torch.nn.Module):
         segment_idx_cands = None,
         mask_cands = None,
     ):
-        if token_idx_cands is None:
-            print("*** For Evaluation Purpose ***")
-            token_idx_cands = torch.randint(1, 3, (64, 128)).to(self.device)
-            segment_idx_ctxt = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
-            segment_idx_cands = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
-            mask_ctxt = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
-            mask_cands = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
+        # if token_idx_cands is None:
+        #     print("*** For Evaluation Purpose ***")
+        #     token_idx_cands = torch.randint(1, 3, (64, 128)).to(self.device)
+        #     segment_idx_ctxt = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
+        #     segment_idx_cands = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
+        #     mask_ctxt = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
+        #     mask_cands = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
         embedding_ctxt = None
         cls_ctxt=None
         embedding_late_interaction_ctxt = None
@@ -125,7 +130,7 @@ class BiEncoderRanker(torch.nn.Module):
         self.build_model()
         model_path = params.get("path_to_model", None)
         if model_path is not None:
-            self.load_model(model_path)
+            self.load_model(model_path, cpu = params["cpu"])
         self.model = self.model.to(self.device)
         self.data_parallel = params.get("data_parallel")
         if self.data_parallel:
@@ -147,8 +152,8 @@ class BiEncoderRanker(torch.nn.Module):
             self.model.load_state_dict(new_state_dict, strict = False)
 
         else:
-            if cpu:
-                state_dict = torch.load(fname, map_location=lambda storage, location: "cpu")
+            if not cpu:
+                state_dict = torch.load(fname, map_location="cpu")
             else:
                 state_dict = torch.load(fname)
             self.model.load_state_dict(state_dict)
@@ -202,9 +207,12 @@ class BiEncoderRanker(torch.nn.Module):
         cand_vecs,
         random_negs=False,
         cand_encs=None,  # pre-computed candidate encoding.
-        cls_cands=None
+        cls_cands=None,
+        embedding_late_interaction_cands = None,
     ):
-
+        device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
         # Encode contexts first
         token_idx_ctxt, segment_idx_ctxt, mask_ctxt = to_bert_input(
             text_vecs, self.NULL_IDX
@@ -212,11 +220,29 @@ class BiEncoderRanker(torch.nn.Module):
         embedding_ctxt, _, cls_ctxt, _, embedding_late_interaction_ctxt, _ = self.model(
             token_idx_ctxt, segment_idx_ctxt, mask_ctxt, None, None, None
         )
-
         # Candidate encoding is given, do not need to re-compute
         # Directly return the score of context encoding and candidate encoding
         if cand_encs is not None:
-            scores=cls_ctxt.mm(cls_cands.t()) 
+
+            if self.params["classification_head"] == "som":
+                batch_size = 32
+                scores = None
+                for i in range(0, embedding_late_interaction_cands.size(0), batch_size):
+                    batch = embedding_late_interaction_cands[i:i+batch_size].to(device)
+                    ctxt_reshaped = embedding_late_interaction_ctxt.reshape(embedding_late_interaction_ctxt.size(0)*embedding_late_interaction_ctxt.size(1), \
+                    embedding_late_interaction_ctxt.size(2))
+                    cands_reshaped = batch.reshape(batch.size(0)* batch.size(1)\
+                    , batch.size(2))
+                    output = torch.mm(ctxt_reshaped, cands_reshaped.t())
+                    output = output.reshape(embedding_late_interaction_ctxt.size(0)*embedding_late_interaction_ctxt.size(1), batch.size(0) , \
+                    batch.size(1)).max(-1)[0]
+                    output = output.t().reshape(batch.size(0)*embedding_late_interaction_ctxt.size(0), embedding_late_interaction_ctxt.size(1))
+                    if scores is None:
+                        scores = torch.sum(output, dim = -1).reshape(batch.size(0), embedding_late_interaction_ctxt.size(0)).t().cpu()
+                    else:
+                        scores = torch.cat([scores, torch.sum(output, dim = -1).reshape(batch.size(0), embedding_late_interaction_ctxt.size(0)).t().cpu()], dim = -1) 
+            else:
+                scores=cls_ctxt.mm(cls_cands.t()) 
             return scores, embedding_ctxt, embedding_late_interaction_ctxt
 
         # Train time. We compare with all elements of the batch
@@ -234,10 +260,42 @@ class BiEncoderRanker(torch.nn.Module):
         #     input = torch.cat((embedding_ctxt.unsqueeze(dim = 1).unsqueeze(dim = 2), embedding_cands.unsqueeze(dim = 1).unsqueeze(dim = 2)), dim = 2)
         #     scores = self.mlp_model(input)
         if random_negs:
+            batch_size = cls_ctxt.size(0)
+            if self.params["classification_head"]=="mlp":
+                cls_ctxt = cls_ctxt.unsqueeze(1) # (64, 1, 768)
+                cls_cands = cls_cands.unsqueeze(0) # (1, 64, 768)
+
+                # Expand tensors using broadcasting
+                cls_ctxt = cls_ctxt.expand(batch_size,batch_size, 768)
+                cls_cands = cls_cands.expand(batch_size, batch_size, 768)
+                # Reshape tensors to (64*64, 2)
+                cls_ctxt = cls_ctxt.reshape(batch_size*batch_size, 768)
+                cls_cands = cls_cands.reshape(batch_size*batch_size, 768)
+
+                # Stack the tensors along the second dimension
+                input = torch.stack([cls_ctxt, cls_cands], dim=1)
+                scores = self.model.module.mlplayer(input)
+                scores = scores.reshape(batch_size, batch_size)
+            elif self.params["classification_head"] == "som":
+                # (64, 1, 128, 768)
+                embedding_late_interaction_ctxt = embedding_late_interaction_ctxt.unsqueeze(1)
+                # (1, 64, 128, 768)
+                embedding_late_interaction_cands = embedding_late_interaction_cands.unsqueeze(0)
+                # expand to (64, 64, 128, 768)
+                embedding_late_interaction_ctxt = embedding_late_interaction_ctxt.expand(batch_size,batch_size, 128, 768)
+                embedding_late_interaction_cands = embedding_late_interaction_cands.expand(batch_size,batch_size, 128, 768)
+                # reshape to (64*64, 128, 768)
+                embedding_late_interaction_ctxt = embedding_late_interaction_ctxt.reshape(batch_size*batch_size, 128, 768)
+                embedding_late_interaction_cands = embedding_late_interaction_cands.reshape(batch_size*batch_size, 128, 768)
+                output = torch.bmm(embedding_late_interaction_ctxt, embedding_late_interaction_cands.transpose(1, 2))
+                scores = torch.max(output, dim = -1)[0]
+                scores = torch.sum(scores, dim = -1)
+                scores = scores.reshape(batch_size, batch_size)
             # train on random negatives
-            scores=cls_ctxt.mm(cls_cands.t())
+            else:
+                # train on hard negatives 
+                scores=cls_ctxt.mm(cls_cands.t())
         else:
-            # train on hard negatives
             embedding_ctxt = embedding_ctxt.unsqueeze(1)  # batchsize x 1 x embed_size
             embedding_cands = embedding_cands.unsqueeze(2)  # batchsize x embed_size x 2
             scores = torch.bmm(cls_ctxt, cls_cands)  # batchsize x 1 x 1

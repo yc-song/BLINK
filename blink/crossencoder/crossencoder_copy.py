@@ -42,6 +42,7 @@ from blink.crossencoder.mlp import MlpModule, MlpModel
 from blink.biencoder.biencoder import BiEncoderModule, BiEncoderRanker
 from blink.crossencoder.parallel import DataParallelModel, DataParallelCriterion
 from parallel import DataParallelModel, DataParallelCriterion
+
 def load_crossencoder(params):
     # Init model
     crossencoder = CrossEncoderRanker(params)
@@ -50,6 +51,9 @@ def load_crossencoder(params):
 class CrossEncoderModule(torch.nn.Module):
     def __init__(self, params, tokenizer):
         super(CrossEncoderModule, self).__init__()
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
+        )
         model_path = params["bert_model"]
         if params.get("roberta"):
             encoder_model = RobertaModel.from_pretrained(model_path)
@@ -58,13 +62,17 @@ class CrossEncoderModule(torch.nn.Module):
         elif params["architecture"] == "raw_context_text":
             encoder_model = RawTextBertModel.from_pretrained(model_path)
             encoder_model.params=params
-        elif params["architecture"] == "baseline" or params["architecture"] == "mlp_with_bert":
+        elif params["architecture"] == "baseline":
+            config = BertConfig.from_pretrained(model_path, output_hidden_states=True)
+            encoder_model = BertModel.from_pretrained(model_path, config = config)
+        elif params["architecture"] == "mlp_with_bert":
             encoder_model = BertModel.from_pretrained(model_path)
         encoder_model.resize_token_embeddings(len(tokenizer))
         if params["architecture"] == "baseline":
             self.encoder = BertEncoder(
                 encoder_model,
                 params["out_dim"],
+                tokenizer,
                 layer_pulled=params["pull_from_layer"],
                 add_linear=params["add_linear"],
             )
@@ -74,15 +82,23 @@ class CrossEncoderModule(torch.nn.Module):
             self.encoder = BertEncoder(
                 encoder_model,
                 params["out_dim"],
+                tokenizer,
                 layer_pulled=params["pull_from_layer"],
                 add_linear=params["add_linear"],
             )
             self.config = self.encoder.bert_model.config
 
     def forward(
-        self, token_idx_ctxt, segment_idx_ctxt, mask_ctxt,
+        self, token_idx_ctxt, segment_idx_ctxt = None, mask_ctxt = None,
     ):
-        embedding_ctxt = self.encoder(token_idx_ctxt.int(), segment_idx_ctxt.int(), mask_ctxt.int())
+        # if segment_idx_ctxt is None:
+        #     print("*** For Evaluation Purpose ***")
+        #     segment_idx_ctxt = torch.zeros(token_idx_ctxt.shape).to(self.device)
+        # if mask_ctxt is None:
+        #     print("*** For Evaluation Purpose ***")
+        #     mask_ctxt = torch.zeros(token_idx_ctxt.shape).to(self.device)
+
+        embedding_ctxt, _, _ = self.encoder(token_idx_ctxt.int(), segment_idx_ctxt.int(), mask_ctxt.int())
         return embedding_ctxt.squeeze(-1)
 
 
@@ -168,7 +184,7 @@ class CrossEncoderRanker(torch.nn.Module):
         embedding_ctxt = self.model(token_idx_ctxt, segment_idx_ctxt, mask_ctxt,)
         # (2080)이 나와야 함
         # check if add_linear true
-        return embedding_ctxt.view(-1, num_cand)
+        return embedding_ctxt.reshape(-1, num_cand)
 
     def forward(self, input_idx, label_input, context_len, evaluate = False):
         scores = self.score_candidate(input_idx, context_len)
@@ -176,6 +192,7 @@ class CrossEncoderRanker(torch.nn.Module):
         # print(scores.shape)
         # print(label_input.shape)
         loss = F.cross_entropy(scores, label_input, reduction="mean")
+        print(loss)
         return loss, scores
 
 
@@ -196,6 +213,147 @@ class CrossEncoderRanker(torch.nn.Module):
         # nullify elements in case self.NULL_IDX was not 0
         # token_idx = token_idx * mask.long()
         return token_idx, segment_idx, mask
+class ExtendExtensionModule(torch.nn.Module):
+    def __init__(self, params, tokenizer):
+        super(ExtendExtensionModule, self).__init__()
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
+        )  
+        self.params = params
+        self.n_heads = params["n_heads"]
+        self.embed_dim = 768
+        self.num_layers = params["num_layers"]
+        self.top_k = 64
+        self.transformerencoderlayer = torch.nn.TransformerEncoderLayer(self.embed_dim, self.n_heads, batch_first = True)
+        self.transformerencoder = torch.nn.TransformerEncoder(self.transformerencoderlayer, self.num_layers)
+        self.attentionlayer = torch.nn.MultiheadAttention(self.embed_dim, self.n_heads, batch_first = True)
+        self.classification_head = torch.nn.Linear(self.embed_dim, 1)
+        # self.layer_norm = torch.nn.LayerNorm(self.embed_dim)
+        # self.feedforward = nn.Sequential(
+        #     nn.Linear(self.embed_dim, self.embed_dim),
+        #     nn.ReLU(),
+        #     nn.Linear(self.embed_dim, self.embed_dim),
+        # )
+        print(self.transformerencoder)
+    def forward(self, input):
+        # attention_result = self.attentionlayer(input, input, input)[0]
+        # attention_result = self.layer_norm(input+attention_result)
+        # linear_result = self.feedforward(attention_result)
+        # attention_result = self.layer_norm(linear_result+attention_result)
+        attention_result = self.transformerencoder(input)
+        if self.params["classification_head"] == "dot":
+            context_input = attention_result[:,0,:].unsqueeze(1)
+            candidate_input = attention_result[:,1:,:]
+            context_input = context_input.expand(-1, self.top_k, -1).reshape(-1, 1, context_input.size(-1))
+            candidate_input = candidate_input.reshape(-1, context_input.size(-1), 1)
+            scores = torch.bmm(context_input, candidate_input)
+            scores = scores.reshape(input.size(0), input.size(1)-1)
+        elif self.params["classification_head"] == "linear":
+            scores = self.classification_head(attention_result)[:,1:,:]
+
+        return scores.squeeze(-1)
+class ExtendExtensionRanker(torch.nn.Module):
+    def __init__(self, params):
+        super(ExtendExtensionRanker, self).__init__()
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
+        )
+        self.n_gpu = torch.cuda.device_count()
+        self.tokenizer = None   
+        self.model = ExtendExtensionModule(params, self.tokenizer)
+        self.model = self.model.to(self.device)
+        self.criterion = torch.nn.CrossEntropyLoss()
+    def forward(self, input, label_input, context_length, evaluate = False):
+        scores = self.model(input)
+        loss = self.criterion(scores, label_input)
+        return loss, scores
+
+
+
+'''DotProductModule and DotProductRanker'''
+# input: same as mlpranker (batch_Size, top_k, 2, Embedding_Size) (e.g. (32, 64, 2, 768))
+class AdditiveScoreModule(torch.nn.Module):
+    def __init__(self, params, tokenizer):
+        super(AdditiveScoreModule, self).__init__()
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
+        )
+        self.input_size = 768
+        self.params = params
+        self.linear_layer_concat = torch.nn.Linear(self.input_size*2, self.input_size)
+        self.linear_layer_mention = torch.nn.Linear(self.input_size, self.input_size)
+        self.linear_layer_entity = torch.nn.Linear(self.input_size, self.input_size)
+        self.linear_score = torch.nn.Linear(self.input_size, 1)
+        self.tanh = nn.Tanh()
+
+    def forward(self, input):
+        if self.params["operation"] == "concat":
+            input = torch.cat([input[:,:,0,:], input[:,:,1,:]], dim = -1)
+            scores = self.linear_score(self.tanh(self.linear_layer_concat(input)))
+        elif self.params["operation"] == "addition":
+            scores = self.linear_score(self.tanh(self.linear_layer_mention(input[:,:,0,:])+self.linear_layer_entity(input[:,:,1,:])))
+        return scores.squeeze(-1)
+
+class AdditiveScoreRanker(torch.nn.Module):
+    def __init__(self, params):
+        super(AdditiveScoreRanker, self).__init__()
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
+        )
+        self.n_gpu = torch.cuda.device_count()
+        self.tokenizer = None   
+        self.model = AdditiveScoreModule(params, self.tokenizer)
+        self.model = self.model.to(self.device)
+        self.criterion = torch.nn.CrossEntropyLoss()
+    def forward(self, input, label_input, context_length, evaluate = False):
+        scores = self.model(input)
+        loss = self.criterion(scores, label_input)
+        return loss, scores
+
+class MultiplicativeScoreModule(torch.nn.Module):
+    def __init__(self, params, tokenizer):
+        super(MultiplicativeScoreModule, self).__init__()
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
+        )
+        self.input_size = 768
+        self.params = params
+        if params["initialization"] == "xavier":
+            self.multiplicative_parameters  = nn.parameter.Parameter(torch.empty(1, self.input_size, self.input_size).to(self.device))
+            nn.init.xavier_uniform_(self.multiplicative_parameters)
+        elif params["initialization"] == "identity":
+            self.multiplicative_parameters = torch.nn.Parameter(torch.eye(self.input_size).unsqueeze(0)) # (1, 768, 768)
+        self.context_mapping = nn.Linear(self.input_size, self.input_size)
+        self.entity_mapping = nn.Linear(self.input_size, self.input_size)
+    def forward(self, input):
+        if self.params["mapping"]:
+            context = self.context_mapping(input[:,:,0,:].reshape(-1, input.size(-1)))
+            entity = self.context_mapping(input[:,:,1,:].reshape(-1, input.size(-1)))
+        else:
+            context = input[:,:,0,:]
+            entity = input[:,:,1,:]
+        context = context.reshape(-1, 1, input.size(-1))
+        entity = entity.reshape(-1, input.size(-1), 1)
+        new_context = torch.bmm(context, self.multiplicative_parameters.expand(context.size(0), self.multiplicative_parameters.size(1), self.multiplicative_parameters.size(2)))
+        scores = torch.bmm(new_context, entity).reshape(input.size(0), input.size(1))
+        return scores
+
+class MultiplicativeScoreRanker(torch.nn.Module):
+    def __init__(self, params):
+        super(MultiplicativeScoreRanker, self).__init__()
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
+        )
+        self.n_gpu = torch.cuda.device_count()
+        self.tokenizer = None   
+        self.model = MultiplicativeScoreModule(params, self.tokenizer)
+        self.model = self.model.to(self.device)
+        self.criterion = torch.nn.CrossEntropyLoss()
+    def forward(self, input, label_input, context_length, evaluate = False):
+        scores = self.model(input)
+        loss = self.criterion(scores, label_input)
+        return loss, scores
+
 
 class MlpwithBiEncoderModule(torch.nn.Module):
     def __init__(self, params, tokenizer):
@@ -211,15 +369,20 @@ class MlpwithBiEncoderModule(torch.nn.Module):
             # self.mlpwithsommodule = MlpwithSOMModule(self.params).to(self.device)
         
         if params["anncur"]:
-            config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
-            print(config)
-            ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
-            cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
-            ctxt_bert.add_adapter('ctxt-bert-adapter')
-            cand_bert.add_adapter('cand-bert-adapter')
-            ctxt_bert.train_adapter('ctxt-bert-adapter')
-            cand_bert.train_adapter('cand-bert-adapter')
-
+            if params["adapter"]:
+                config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
+                ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
+                cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
+                ctxt_bert.add_adapter('ctxt-bert-adapter')
+                cand_bert.add_adapter('cand-bert-adapter')
+                ctxt_bert.train_adapter('ctxt-bert-adapter')
+                cand_bert.train_adapter('cand-bert-adapter')
+                ctxt_bert.set_active_adapters("ctxt-bert-adapter")
+                cand_bert.set_active_adapters("cand-bert-adapter")
+            else:
+                config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
+                ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
+                cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
         else:
             ctxt_bert = BertModel.from_pretrained(params["bert_model"])
             cand_bert = BertModel.from_pretrained(params['bert_model'])
@@ -243,9 +406,17 @@ class MlpwithBiEncoderModule(torch.nn.Module):
         self.params = params
 
     def forward(
-        self, token_idx_ctxt, segment_idx_ctxt, mask_ctxt, token_idx_cands, segment_idx_cands, mask_cands, num_cand
+        self, token_idx_ctxt, segment_idx_ctxt  = None, mask_ctxt = None, token_idx_cands = None, segment_idx_cands = None, mask_cands = None, num_cand = None
     ):
         # Obtaining BERT embedding of context and candidate from bi-encoder
+        # if token_idx_cands is None:
+        #     print("*** For Evaluation Purpose ***")
+        #     token_idx_cands = torch.randint(1, 3, (64, 128)).to(self.device)
+        #     segment_idx_ctxt = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
+        #     segment_idx_cands = torch.zeros(token_idx_cands.shape).int().to(self.device)
+        #     mask_ctxt = torch.zeros(token_idx_ctxt.shape).int().to(self.device)
+        #     mask_cands = torch.zeros(token_idx_cands.shape).int().to(self.device)
+        #     print(token_idx_ctxt.shape, segment_idx_ctxt.shape, mask_ctxt.shape)
         embedding_ctxt = None
         if token_idx_ctxt is not None:
             embedding_ctxt, cls_ctxt, all_embeddings_ctxt = self.context_encoder(
@@ -790,5 +961,6 @@ class RawTextBertModel(BertModel):
         outputs = (sequence_output, pooled_output,) + encoder_outputs[1:]  # add hidden_states and attentions if they are here
         
         return outputs  # sequence_output, pooled_output, (hidden_states), (attentions)
+
 
 # class MlpwithSOM()

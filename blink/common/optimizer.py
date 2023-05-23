@@ -62,13 +62,13 @@ def get_bert_optimizer(models, type_optimization, learning_rate, fp16=False):
 
 
     print('The following parameters will be optimized WITH decay:')
-
+    # print(parameters_with_decay_names)
     print(ellipse(parameters_with_decay_names, 5, ' , '))
     print('The following parameters will be optimized WITHOUT decay:')
+    # print(parameters_without_decay_names)
     print(ellipse(parameters_without_decay_names, 5, ' , '))
     print('The following parameters will be optimized WITHOUT decay:')
     print(ellipse(parameters_mlp_names, 5, ' , '))
-
     
     # print(parameters_without_decay_names)
 

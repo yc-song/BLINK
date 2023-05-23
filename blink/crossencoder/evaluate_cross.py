@@ -49,8 +49,16 @@ label = []
 bi_prediction = []
 cross_prediction = []
 worlds = []
-bi_ratio = []
+min_difficulty = []
+avg_difficulty = []
+max_difficulty = []
+mention_position = []
 cross_ratio = []
+
+def extract_word_between(text, word1, word2):
+    words = text.split(word1)[1].split(word2)[0].strip()
+    return words
+
 def modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = True):
     device = torch.device(
             "cuda" if torch.cuda.is_available() and not params["no_cuda"] else "cpu"
@@ -146,11 +154,17 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
         label_ids = label_input.cpu().numpy()
         if params["architecture"] == "mlp_with_bert":
             for i in range(context_input.size(0)):
-                mention.append(reranker.tokenizer.decode(context_input[i][0][0][:].int().tolist()))
-                label.append(reranker.tokenizer.decode(context_input[i][label_ids[i]][1][:].int().tolist()))
-                bi_prediction.append(reranker.tokenizer.decode(context_input[i][0][1][:].int().tolist()))
-                cross_prediction.append(reranker.tokenizer.decode(context_input[i][np.argmax(logits[i])][1][:].int().tolist()))
+                context_sentence = reranker.tokenizer.decode(context_input[i][0][0][:].int().tolist())
+                mention.append(extract_word_between(context_sentence, "[unused1]", "[unused2]"))
+                label.append(extract_word_between(reranker.tokenizer.decode(context_input[i][label_ids[i]][1][:].int().tolist()), "[CLS]", "[unused3]"))
+                bi_prediction.append(extract_word_between(reranker.tokenizer.decode(context_input[i][0][1][:].int().tolist()), "[CLS]", "[unused3]"))
+                cross_prediction.append(extract_word_between(reranker.tokenizer.decode(context_input[i][np.argmax(logits[i])][1][:].int().tolist()), "[CLS]", "[unused3]"))
                 worlds.append(world[i].item())
+                for j in range(len(context_sentence.split())):
+                    if "[unused1]" in context_sentence.split()[j]:
+                        mention_position.append(j)
+                        break
+                # mention_position.append(reranker.tokenizer.decode(context_input[i][0][0][:].int().tolist()).split().index("[unused1]"))
                 if np.argmax(logits[i]) == label_ids[i]:
                     if 0 == label_ids[i]:
                         types.append(1)
@@ -164,9 +178,16 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
                             types.append(4)
                         elif context_input[i][0][1][:].int().tolist() != context_input[i][np.argmax(logits[i])][1][:].int().tolist():
                             types.append(5)
-                bi_ratio.append(fuzz.ratio(label[-1], bi_prediction[-1]))
-                cross_ratio.append(fuzz.ratio(label[-1], cross_prediction[-1]))
-                
+                query = mention[-1]
+                n = len(query.split())
+                values = label[-1].split()
+                fuzz_scores = []
+                for value in values:
+                    score = fuzz.token_set_ratio(query, value)
+                    fuzz_scores.append(score)
+                min_difficulty.append(min(fuzz_scores))
+                avg_difficulty.append(sum(fuzz_scores)/len(fuzz_scores))
+                max_difficulty.append(max(fuzz_scores))
         tmp_eval_accuracy, eval_result = utils.accuracy(logits, label_ids)
         
         eval_recall += utils.recall(logits, label_ids)
@@ -522,7 +543,7 @@ def main(params):
         wo64=params["without_64"]
     )
     if params["architecture"] == "mlp_with_bert":
-        raw_data = [types, worlds, mention, label, bi_prediction, cross_prediction, bi_ratio, cross_ratio]
+        raw_data = [types, worlds, mention, label, bi_prediction, cross_prediction, mention_position, min_difficulty, avg_difficulty, max_difficulty]
         transposed_data = list(zip(*raw_data))
         with open('val.csv', 'w', newline='') as file:
 

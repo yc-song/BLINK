@@ -6,8 +6,8 @@
 "num_train_epochs":10000,
 "max_context_length": 128,
 "max_cand_length": 128,
-"train_batch_size": 128,
-"eval_batch_size": 128,
+"train_batch_size": 64,
+"eval_batch_size":64,
 "type_optimization": "all_encoder_layers",
 "data_parallel": true,
 "zeshel": true,
@@ -15,7 +15,7 @@
 "add_linear": true,
 "output_path": "models/zeshel/crossencoder/",
 "patience": 20,
-"layers": 6,
+"layers": 1,
 "step_size":100,
 "eval_interval": 200,
 "optimizer": "AdamW",
@@ -23,7 +23,7 @@
 "positional_encoding": false,
 "wandb": "BLINK-blink_crossencoder",
 "save": true,
-"dim_red": 512,
+"dim_red": 768,
 "train_size": -1,
 "valid_size": -1,
 "save_interval": 500,
@@ -47,5 +47,5 @@
 "test_split": 1,
 "late_interaction": false,
 "dot_product": false,
-"bert_lr": 1e-4
+"bert_lr": 2e-5
 }

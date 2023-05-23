@@ -171,7 +171,7 @@ class MlpModule(nn.Module):
         self.device=torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )
-        self.positional_encoding = torch.nn.Parameter(torch.normal(0, 0.1, size=(2,768)).to(self.device))
+        self.positional_encoding = torch.nn.Parameter(torch.normal(0, 1, size=(2,768)).to(self.device))
         self.positional_encoding.requires_grad = True
         if params["act_fn"] == "softplus":
             self.act_fn = nn.Softplus()

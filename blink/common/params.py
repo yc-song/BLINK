@@ -120,6 +120,39 @@ class BlinkParser(argparse.ArgumentParser):
             "--with_mlp", action="store_true", help="Whether to add mlp layers on top of Bi-encoder."
         )
         parser.add_argument(
+            "--pooling", type=str, default="cls", help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
+            "--colbert_baseline", type=str2bool, default=False, help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
+            "--ffnn_over_all", type=str2bool, default=False, help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
+            "--extend_bert", default = False, type=str2bool, help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
+            "--mapping", default = False, type=str2bool, help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
+            "--opeartion", default = "concat", type=str, help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
+            "--initialization", default = "identity", type=str, help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
+            "--operation", default = "concat", type=str, help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
+            "--classification_head", default = "linear", type=str, help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
+            "--n_heads", default = 6, type=int, help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
+            "--num_layers", default = 2, type=int, help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
             "--bert_lr", default= config["bert_lr"], type= float,  help="Bi-encoder lr."
         )
         parser.add_argument(
@@ -251,6 +284,18 @@ class BlinkParser(argparse.ArgumentParser):
             type=str,
             help="wandb project name.",
         )
+        parser.add_argument(
+            "--dim_red",
+            default=config["dim_red"],
+            type=int,
+            help="first dimension",
+        )
+        parser.add_argument(
+            "--cpu",
+            type = str2bool,
+            default = "False",
+            help="first dimension",
+        )
 
 
         parser.add_argument(
@@ -378,12 +423,6 @@ class BlinkParser(argparse.ArgumentParser):
             default=config["num_train_epochs"],
             type=int,
             help="Number of training epochs.",
-        )
-        parser.add_argument(
-            "--dim_red",
-            default=config["dim_red"],
-            type=int,
-            help="first dimension",
         )
         parser.add_argument(
             "--train_size",

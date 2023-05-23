@@ -132,13 +132,12 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
             context_input = modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = params["without_64"])
         
         reranker.train()
-        with get_accelerator().device(0):
-            flops, macs, params = get_model_profile(
-            reranker,
-            args=[torch.randint(1, 3, (1, 64, 256)).to(reranker.device), torch.randint(1, 3, (1,)).to(reranker.device), 128],
-            print_profile=True,
-            detailed=True,
-            )
+        flops, macs, params = get_model_profile(
+        reranker,
+        args=[torch.randint(1, 3, (1, 64, 128)).to(reranker.device), torch.randint(1, 3, (1,)).to(reranker.device), 128],
+        print_profile=True,
+        detailed=True,
+        )
 
 def main(params):
     gc.collect()
@@ -380,16 +379,31 @@ def main(params):
     # )
 
 
-
+    #mlp-with-bert
     with get_accelerator().device(0):
         flops, macs, params = get_model_profile(
-        model,
-        args=[torch.randint(1, 3, (64, 256)).to(reranker.device)],
+        reranker,
+        args=[torch.randint(1, 3, (32, 2, 128)).to(reranker.device), torch.randint(1, 3, (1,)).to(reranker.device), 128],
         print_profile=True,
         detailed=True,
         )
-    
-    
+    #mlp
+    # with get_accelerator().device(0):
+    #     flops, macs, params = get_model_profile(
+    #     reranker,
+    #     args=[torch.rand(1, 32, 2, 768).to(reranker.device), torch.randint(1, 3, (1,)).to(reranker.device), 128],
+    #     print_profile=True,
+    #     detailed=True,
+    #     )
+    #mlp-som
+    # with get_accelerator().device(0):
+    #     flops, macs, params = get_model_profile(
+    #     reranker,
+    #     args=[torch.rand(1, 32, 2, 128, 768).to(reranker.device), torch.randint(1, 3, (1,)).to(reranker.device), 128],
+    #     print_profile=True,
+    #     detailed=True,
+    #     )
+
     # baseline
     # input = torch.randint(1, 3, (64, 256)).to(device)
     # mlp-with-bert
