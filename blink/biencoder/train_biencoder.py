@@ -19,7 +19,7 @@ import numpy as np
 import sys
 sys.path.append('.')
 from multiprocessing.pool import ThreadPool
-
+import math
 from tqdm import tqdm, trange
 from collections import OrderedDict
 
@@ -47,6 +47,22 @@ logger = None
 # The evaluate function during training uses in-batch negatives:
 # for a batch of size B, the labels from the batch are used as label candidates
 # B is controlled by the parameter eval_batch_size
+def find_most_recent_file(
+    folder_path
+):
+    each_file_path_and_gen_time = []
+    ## Getting newest file
+    for each_file_name in os.listdir(folder_path):
+        each_file_path = folder_path + each_file_name
+        if not os.path.isfile(each_file_path):
+            each_file_gen_time = os.path.getctime(each_file_path)
+            each_file_path_and_gen_time.append(
+                (each_file_path, each_file_gen_time)
+            )
+    most_recent_file = max(each_file_path_and_gen_time, key=lambda x: x[1])[0] + "/pytorch_model.bin"
+    print(most_recent_file)
+
+    return most_recent_file
 def evaluate(
     reranker, eval_dataloader, params, device, logger,
 ):
@@ -116,7 +132,7 @@ def get_scheduler(params, optimizer, len_train_data, logger):
     grad_acc = params["gradient_accumulation_steps"]
     epochs = params["num_train_epochs"]
 
-    num_train_steps = int(len_train_data / batch_size / grad_acc) * epochs
+    num_train_steps = (math.ceil(len_train_data / batch_size / grad_acc)) * epochs
     num_warmup_steps = int(num_train_steps * params["warmup_proportion"])
 
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_train_steps)
@@ -126,11 +142,11 @@ def get_scheduler(params, optimizer, len_train_data, logger):
 
 
 def main(params):
-    run = wandb.init(project="BLINK-biencoder")
-    folder_path="models/zeshel/biencoder/{}/".format(run.id)
-    model_output_path = params["output_path"]
-    if not os.path.exists(model_output_path):
-        os.makedirs(model_output_path)
+    if params["resume"]: 
+        run = wandb.init(project=params["wandb"], config=parser, resume="must", id=params["run_id"])
+    else:
+        run = wandb.init(project="BLINK-biencoder")
+
     logger = utils.get_logger(params["output_path"])
 
     # Init model
@@ -207,19 +223,13 @@ def main(params):
         valid_tensor_data, sampler=valid_sampler, batch_size=eval_batch_size
     )
 
-    # evaluate before training
-    results = evaluate(
-        reranker, valid_dataloader, params, device=device, logger=logger,
-    )
-    wandb.log({"accuracy": results["normalized_accuracy"], "epoch": 0})
+
 
     number_of_samples_per_dataset = {}
 
     time_start = time.time()
 
-    utils.write_to_file(
-        os.path.join(model_output_path, "training_params.txt"), str(params)
-    )
+
 
     logger.info("Starting training")
     logger.info(
@@ -229,8 +239,30 @@ def main(params):
     optimizer = get_optimizer(model, params)
     scheduler = get_scheduler(params, optimizer, len(train_tensor_data), logger)
     optimizer_mlp = None
+    epoch_idx_global = -1
     if params["classification_head"] == "mlp":
         optimizer_mlp = get_optimizer(model, params, architecture = "mlp")
+    if params["resume"]: 
+        model_output_path="models/zeshel/biencoder/{}/".format(run.id)
+        most_recent_file = find_most_recent_file(model_output_path)
+        reranker, epoch_idx_global, optimizer = utils.load_model(most_recent_file, reranker, optimizer)
+        optimizer.step()
+        if optimizer_mlp is not None:
+            optimizer_mlp.step()
+        for i in range(math.ceil(len(train_tensor_data) / params["train_batch_size"] / params["gradient_accumulation_steps"]) * (epoch_idx_global+1)):
+            scheduler.step()
+    else:
+        model_output_path="models/zeshel/biencoder/{}/".format(run.id)
+    if not os.path.exists(model_output_path):
+        os.makedirs(model_output_path)
+    utils.write_to_file(
+        os.path.join(model_output_path, "training_params.txt"), str(params)
+    )
+    # evaluate before training
+    results = evaluate(
+        reranker, valid_dataloader, params, device=device, logger=logger,
+    )
+    wandb.log({"accuracy": results["normalized_accuracy"], "epoch": epoch_idx_global})
 
     model.train()
 
@@ -238,7 +270,7 @@ def main(params):
     best_score = -1
 
     num_train_epochs = params["num_train_epochs"]
-    for epoch_idx in trange(int(num_train_epochs), desc="Epoch"):
+    for epoch_idx in trange(epoch_idx_global+1, int(num_train_epochs), desc="Epoch"):
         tr_loss = 0
         results = None
 
@@ -269,8 +301,8 @@ def main(params):
                         epoch_idx,
                         tr_loss / (params["print_interval"] * grad_acc_steps),
                     )
-                )
-                wandb.log({"train_loss": tr_loss / (params["print_interval"] * grad_acc_steps), "epoch": epoch_idx})
+                ) 
+                wandb.log({"train_loss": tr_loss / (params["print_interval"] * grad_acc_steps), "epoch": epoch_idx, "learning_rate": optimizer.param_groups[0]['lr']})
 
                 tr_loss = 0
             # print("***0****")
@@ -314,19 +346,20 @@ def main(params):
         epoch_output_folder_path = os.path.join(
             model_output_path, "epoch_{}".format(epoch_idx)
         )
-        utils.save_model(model, tokenizer, epoch_output_folder_path)
+        utils.save_model(model, tokenizer, epoch_output_folder_path, epoch_idx, optimizer)
 
         output_eval_file = os.path.join(epoch_output_folder_path, "eval_results.txt")
         results = evaluate(
             reranker, valid_dataloader, params, device=device, logger=logger,
         )
-        wandb.log({"accuracy": results["normalized_accuracy"], "epoch":epoch_idx})
 
         ls = [best_score, results["normalized_accuracy"]]
         li = [best_epoch_idx, epoch_idx]
 
         best_score = ls[np.argmax(ls)]
         best_epoch_idx = li[np.argmax(ls)]
+        wandb.log({"accuracy": results["normalized_accuracy"], "epoch":epoch_idx,\
+        "best_accuracy": best_score, "learning_rate": optimizer.param_groups[0]['lr']})
         logger.info("\n")
 
     execution_time = (time.time() - time_start) / 60
@@ -343,8 +376,8 @@ def main(params):
         "epoch_{}".format(best_epoch_idx),
         WEIGHTS_NAME,
     )
-    reranker = load_biencoder(params)
-    utils.save_model(reranker.model, tokenizer, model_output_path)
+    reranker.load_model(params["path_to_model"])
+    utils.save_model(reranker.model, tokenizer, model_output_path, epoch_idx, optimizer)
 
     if params["evaluate"]:
         params["path_to_model"] = model_output_path

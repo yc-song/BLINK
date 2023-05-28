@@ -159,7 +159,7 @@ def remove_module_from_state_dict(state_dict):
     return new_state_dict
 
 
-def save_model(model, tokenizer, output_dir):
+def save_model(model, tokenizer, output_dir, epoch = None, optimizer = None):
     """Saves the model and the tokenizer used in the output directory."""
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -167,10 +167,33 @@ def save_model(model, tokenizer, output_dir):
     model_to_save = model.module if hasattr(model, "module") else model
     output_model_file = os.path.join(output_dir, WEIGHTS_NAME)
     output_config_file = os.path.join(output_dir, CONFIG_NAME)
-    torch.save(model_to_save.state_dict(), output_model_file)
+    if epoch is not None:
+        torch.save({"state_dict":model_to_save.state_dict(),\
+        "epoch": epoch,\
+        "optimizer_state_dict": optimizer.state_dict(),\
+        }, output_model_file)
+    else:
+        torch.save(model.state_dict(), output_model_file)
     model_to_save.config.to_json_file(output_config_file)
     tokenizer.save_vocabulary(output_dir)
 
+def load_model(most_recent_file, reranker, optimizer):
+    checkpoint = torch.load(most_recent_file)
+    new_state_dict = OrderedDict()
+    for k, v in checkpoint["state_dict"].items():
+        if not k.startswith('module'):
+            name = "model.module."+k
+            new_state_dict[name] = v
+        elif not k.startswith('model'):
+            name = "model."+k
+            new_state_dict[name] = v
+        else:
+            name = k
+            new_state_dict[name] = v
+    reranker.load_state_dict(new_state_dict)
+    epoch_idx_global = checkpoint['epoch']
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    return reranker, epoch_idx_global, optimizer
 
 def get_logger(output_dir=None):
     if output_dir != None:
