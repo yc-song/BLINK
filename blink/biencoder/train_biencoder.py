@@ -22,7 +22,7 @@ from multiprocessing.pool import ThreadPool
 import math
 from tqdm import tqdm, trange
 from collections import OrderedDict
-
+import shutil
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 
 from transformers.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
@@ -47,6 +47,18 @@ logger = None
 # The evaluate function during training uses in-batch negatives:
 # for a batch of size B, the labels from the batch are used as label candidates
 # B is controlled by the parameter eval_batch_size
+def keep_recent_file(model_path, max_files, best_epoch_idx):
+    best_epoch_idx = str(best_epoch_idx)
+    files = [name for name in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, name))]
+    files = ["{}/{}".format(model_path, file) for file in files]
+    files.sort(key=lambda x: os.path.getmtime(x))
+    if len(files) > max_files:
+        del_list = files[0:max(len(files)-max_files, 0)]
+        for del_file in del_list:
+            if not del_file.endswith(best_epoch_idx):
+                print("removed:", del_file)
+                shutil.rmtree(del_file)
+
 def find_most_recent_file(
     folder_path
 ):
@@ -108,6 +120,7 @@ def get_optimizer(model, params, architecture = None):
             [model],
             params["type_optimization"],
             params["bert_lr"],
+            params["learning_rate"],
             fp16=params.get("fp16"),
         )
     elif architecture == "mlp":
@@ -270,7 +283,13 @@ def main(params):
     best_score = -1
 
     num_train_epochs = params["num_train_epochs"]
+    print(optimizer)
     for epoch_idx in trange(epoch_idx_global+1, int(num_train_epochs), desc="Epoch"):
+        logger.info("***** Saving fine - tuned model *****")
+        epoch_output_folder_path = os.path.join(
+            model_output_path, "epoch_{}".format(epoch_idx)
+        )
+        utils.save_model(model, tokenizer, epoch_output_folder_path, -1, optimizer)
         tr_loss = 0
         results = None
 
@@ -360,7 +379,8 @@ def main(params):
         best_epoch_idx = li[np.argmax(ls)]
         wandb.log({"accuracy": results["normalized_accuracy"], "epoch":epoch_idx,\
         "best_accuracy": best_score, "learning_rate": optimizer.param_groups[0]['lr']})
-        logger.info("\n")
+        logger.info("***** Removing old models *****")
+        keep_recent_file(model_output_path[:-1], 1, best_epoch_idx)
 
     execution_time = (time.time() - time_start) / 60
     utils.write_to_file(

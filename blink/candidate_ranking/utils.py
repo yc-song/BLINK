@@ -184,9 +184,6 @@ def load_model(most_recent_file, reranker, optimizer):
         if not k.startswith('module'):
             name = "model.module."+k
             new_state_dict[name] = v
-        elif not k.startswith('model'):
-            name = "model."+k
-            new_state_dict[name] = v
         else:
             name = k
             new_state_dict[name] = v

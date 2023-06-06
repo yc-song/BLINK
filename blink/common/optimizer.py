@@ -33,16 +33,17 @@ patterns_optimizer = {
     'all_encoder_layers': ['additional', 'bert_model.encoder.layer'],
     'all': ['additional', 'bert_model.encoder.layer', 'bert_model.embeddings'],
 }
+head_layers = ['transformer', 'linearhead']
 
-def get_bert_optimizer(models, type_optimization, learning_rate, fp16=False):
+def get_bert_optimizer(models, type_optimization, learning_rate, head_learning_rate, fp16=False):
     """ Optimizes the network with AdamWithDecay
     """
     if type_optimization not in patterns_optimizer:
         print(
             'Error. Type optimizer must be one of %s' % (str(patterns_optimizer.keys()))
         )
-    parameters_mlp=[]
-    parameters_mlp_names=[]
+    parameters_head=[]
+    parameters_head_names=[]
     parameters_with_decay = []
     parameters_with_decay_names = []
     parameters_without_decay = []
@@ -59,7 +60,9 @@ def get_bert_optimizer(models, type_optimization, learning_rate, fp16=False):
                 else:
                     parameters_with_decay.append(p)
                     parameters_with_decay_names.append(n)
-
+            elif any(t in n for t in head_layers):
+                parameters_head.append(p)
+                parameters_head_names.append(n)
 
     print('The following parameters will be optimized WITH decay:')
     # print(parameters_with_decay_names)
@@ -67,14 +70,15 @@ def get_bert_optimizer(models, type_optimization, learning_rate, fp16=False):
     print('The following parameters will be optimized WITHOUT decay:')
     # print(parameters_without_decay_names)
     print(ellipse(parameters_without_decay_names, 5, ' , '))
-    print('The following parameters will be optimized WITHOUT decay:')
-    print(ellipse(parameters_mlp_names, 5, ' , '))
+    print('The following parameters will be optimized using head lr:')
+    print(ellipse(parameters_head_names, 5, ' , '))
     
     # print(parameters_without_decay_names)
 
     optimizer_grouped_parameters = [
         {'params': parameters_with_decay, 'weight_decay': 0.01, 'lr': learning_rate},
         {'params': parameters_without_decay, 'weight_decay': 0.0, 'lr': learning_rate},
+        {'params': parameters_head, 'weight_decay': 0.01, 'lr': head_learning_rate}
     ]
     optimizer = AdamW(
         optimizer_grouped_parameters, 

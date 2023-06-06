@@ -89,33 +89,49 @@ def get_topk_predictions(
             src = 0
         cand_encode_list[src] = cand_encode_list[src].to(device)
         cand_cls_list[src] = cand_cls_list[src].to(device)
-        scores, embedding_ctxt, embedding_late_interaction_ctxt = reranker.score_candidate(
-            context_input, 
-            None, 
-            cand_encs=cand_encode_list[src],
-            cls_cands=cand_cls_list[src],
-            embedding_late_interaction_cands = cand_encode_late_interaction[src]
-        ) #scores: (batch_size, each_world_size)
-        values, indicies = scores.topk(top_k)
-        old_src = src
+        if params["classification_head"] == "dot":
+            scores, embedding_ctxt, embedding_late_interaction_ctxt = reranker.score_candidate(
+                context_input, 
+                None, 
+                cand_encs=cand_encode_list[src],
+                cls_cands=cand_cls_list[src],
+                embedding_late_interaction_cands = cand_encode_late_interaction[src]
+            ) #scores: (batch_size, each_world_size)
+            values, indicies = scores.topk(top_k)
+            old_src = src
+
 
         for i in range(context_input.size(0)):
             oid += 1
-            inds = indicies[i]
-            value = values[i]
-            src = srcs[i].item()
-            if src != old_src:
+            if params["classification_head"] == "dot":
+                inds = indicies[i]
+                value = values[i]
+                src = srcs[i].item()
+                if src != old_src:
+                    # not the same domain, need to re-do
+                    new_scores, _, _ = reranker.score_candidate(
+                        context_input[[i]], 
+                        None,
+                        cand_encs=cand_encode_list[src].to(device),
+                        cls_cands=cand_cls_list[src].to(device),
+                        embedding_late_interaction_cands = cand_encode_late_interaction[src]
+                    )
+                    value, inds = new_scores.topk(top_k)
+                    inds = inds[0]
+                    value = value[0]
+            else:
                 # not the same domain, need to re-do
+                src = srcs[i].item()
                 new_scores, _, _ = reranker.score_candidate(
                     context_input[[i]], 
                     None,
                     cand_encs=cand_encode_list[src].to(device),
                     cls_cands=cand_cls_list[src].to(device),
-                    embedding_late_interaction_cands = cand_encode_late_interaction[src].to(device)
+                    embedding_late_interaction_cands = cand_encode_late_interaction[src]
                 )
                 value, inds = new_scores.topk(top_k)
                 inds = inds[0]
-                value = value[0]
+                value = value[0]            
             pointer = -1
             for j in range(top_k):
                 if inds[j].item() == label_ids[i].item():
@@ -128,28 +144,28 @@ def get_topk_predictions(
                 # cur_candidates = candidate_pool[srcs[i].item()][inds]
             # else:
                 # cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
-            
-            if params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
-                nn_context.append(context_input[i].cpu().tolist())#(1024)
-            elif params["architecture"] == "mlp_with_som" or params["architecture"] == "extend_multi":
-                nn_context.append(embedding_late_interaction_ctxt[i].cpu().tolist())#(1024)
-                # if type(nn_context) is list:
-                #     nn_context = embedding_late_interaction_ctxt
-                # else:
-                #     nn_context = torch.cat([nn_context, embedding_late_interaction_ctxt], dim=0)
-            else:
-                nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
-            nn_idxs.append([x + cumulative_idx[srcs[i].item()-src_minus] for x in inds.tolist()])
-            nn_scores.append(value.tolist())
-            nn_labels.append(pointer)
-            nn_worlds.append(srcs[i].item()-src_minus)
+            if save_predictions:
+                if params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
+                    nn_context.append(context_input[i].cpu().tolist())#(1024)
+                elif params["architecture"] == "mlp_with_som" or params["architecture"] == "extend_multi":
+                    nn_context.append(embedding_late_interaction_ctxt[i].cpu().tolist())#(1024)
+                    # if type(nn_context) is list:
+                    #     nn_context = embedding_late_interaction_ctxt
+                    # else:
+                    #     nn_context = torch.cat([nn_context, embedding_late_interaction_ctxt], dim=0)
+                else:
+                    nn_context.append(embedding_ctxt[i].cpu().tolist())#(1024)
+                nn_idxs.append([x + cumulative_idx[srcs[i].item()-src_minus] for x in inds.tolist()])
+                nn_scores.append(value.tolist())
+                nn_labels.append(pointer)
+                nn_worlds.append(srcs[i].item()-src_minus)
 
             # if pointer == -1:
             #     # pointer = j + 1
 
             #     continue
 
-            if not save_predictions:
+            else: 
                 continue
 
             # # add examples in new_data
@@ -184,10 +200,11 @@ def get_topk_predictions(
         'indexes': nn_idxs
     }
     # print("candidate", nn_data["candidate_vecs"])
-    print("context shape", nn_data["context_vecs"].shape)
-    print("score shape", nn_data["nn_scores"].shape)
-    print("index shape", nn_data["indexes"].shape)
-    print("labels", nn_data["labels"].shape)
+    if save_predictions:
+        print("context shape", nn_data["context_vecs"].shape)
+        print("score shape", nn_data["nn_scores"].shape)
+        print("index shape", nn_data["indexes"].shape)
+        print("labels", nn_data["labels"].shape)
     if split == 0:
         if params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
             for i in range(len(cand_encode_list)):

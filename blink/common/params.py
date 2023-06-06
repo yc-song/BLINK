@@ -144,7 +144,7 @@ class BlinkParser(argparse.ArgumentParser):
             "--operation", default = "concat", type=str, help="Whether to add mlp layers on top of Bi-encoder."
         )
         parser.add_argument(
-            "--classification_head", default = "linear", type=str, help="Whether to add mlp layers on top of Bi-encoder."
+            "--classification_head", default = "dot", type=str, help="Whether to add mlp layers on top of Bi-encoder."
         )
         parser.add_argument(
             "--n_heads", default = 6, type=int, help="Whether to add mlp layers on top of Bi-encoder."
@@ -277,7 +277,10 @@ class BlinkParser(argparse.ArgumentParser):
             type=str2bool,
             help="wandb project name.",
         )
-
+        parser.add_argument(
+            "--positional_encoding", type=str2bool, default=config["positional_encoding"], 
+            help="Interval of loss printing",
+        )
         parser.add_argument(
             "--run_id",
             default=config["run_id"],
@@ -450,10 +453,6 @@ class BlinkParser(argparse.ArgumentParser):
         )
         parser.add_argument(
             "--print_interval", type=int, default=50, 
-            help="Interval of loss printing",
-        )
-        parser.add_argument(
-            "--positional_encoding", type=str2bool, default=config["positional_encoding"], 
             help="Interval of loss printing",
         )
         parser.add_argument(

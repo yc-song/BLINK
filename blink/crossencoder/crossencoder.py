@@ -955,13 +955,23 @@ class MlpwithSOMModule(nn.Module):
             context = context[:,0,:,:] #(batch*top_k,max_length, embedding_dimension)
         mask = torch.tensor(context != 0)[:,:,0]
         if self.params["ffnn_over_all"]:
-            entity = entity.reshape(-1, entity.size(-1))
-            context = context.reshape(-1, context.size(-1))
+            context = context.unsqueeze(-2)
+            entity = entity.unsqueeze(-3)
+
+            context = context.expand(-1, -1, context.size(1), -1).cpu()
+            entity = entity.expand(-1, entity.size(2), -1, -1).cpu()
+
+            context = context.reshape(context.size(0)*context.size(1)*context.size(2), context.size(3))
+            entity = entity.reshape(entity.size(0)*entity.size(1)*entity.size(2), entity.size(3))
             mlp_input = torch.stack((context, entity), dim = 1)
             output = self.mlpmodule(mlp_input)
-            output = output.reshape(input.size(0), input.size(1), input.size(3))
+            
+            output = output.reshape(input.size(0)*input.size(1), input.size(3), input.size(3))
+            output = torch.max(output, dim = -1)[0]
             output *= mask
+            # print(output, mask)
             output = torch.sum(output, -1)
+            # print("0", output.shape)
             return output, None
         output = torch.bmm(context, entity.transpose(1,2))
         if self.params["colbert_baseline"]:

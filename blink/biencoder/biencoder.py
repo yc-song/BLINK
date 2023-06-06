@@ -63,6 +63,14 @@ class BiEncoderModule(torch.nn.Module):
         )
         self.config = ctxt_bert.config
         self.params = params
+        if params["classification_head"] == "extend_multi" or params["classification_head"] == "extend_multi_full":
+            self.n_heads = params["n_heads"]
+            self.num_layers = params["num_layers"]
+            self.embed_dim = 768
+            self.transformerencoderlayer = torch.nn.TransformerEncoderLayer(self.embed_dim, self.n_heads, batch_first = True).to(self.device)
+            self.transformerencoder = torch.nn.TransformerEncoder(self.transformerencoderlayer, self.num_layers).to(self.device)
+            self.linearhead = torch.nn.Linear(self.embed_dim, 1).to(self.device)
+            self.sep_embedding = torch.normal(0, 1, size = (1, self.embed_dim)).to(self.device)
 
     def forward(
         self,
@@ -123,7 +131,6 @@ class BiEncoderRanker(torch.nn.Module):
         }
         self.tokenizer.add_special_tokens(special_tokens_dict)
         self.START_TOKEN = self.tokenizer.cls_token
-
         self.END_TOKEN = self.tokenizer.sep_token
         self.NULL_IDX = self.tokenizer.pad_token_id
         # init model
@@ -135,6 +142,8 @@ class BiEncoderRanker(torch.nn.Module):
         self.data_parallel = params.get("data_parallel")
         if self.data_parallel:
             self.model = torch.nn.DataParallel(self.model)
+
+
 
     def load_model(self, fname, cpu=False):
         if self.params["anncur"]:
@@ -156,7 +165,25 @@ class BiEncoderRanker(torch.nn.Module):
                 state_dict = torch.load(fname, map_location="cpu")
             else:
                 state_dict = torch.load(fname)
-            self.model.load_state_dict(state_dict)
+            new_state_dict = OrderedDict()
+            try:
+                for k, v in state_dict["state_dict"].items():
+                    if not k.startswith('model'):
+                        name = "model."+k
+                        new_state_dict[name] = v
+                    else:
+                        name = k
+                        new_state_dict[name] = v
+                self.load_state_dict(new_state_dict)
+            except KeyError:
+                for k, v in state_dict.items():
+                    if not k.startswith('model'):
+                        name = "model.module."+k
+                        new_state_dict[name] = v
+                    else:
+                        name = k
+                        new_state_dict[name] = v
+                self.load_state_dict(new_state_dict, strict=False)
 
     def build_model(self):
         self.model = BiEncoderModule(self.params, self.tokenizer)
@@ -225,12 +252,22 @@ class BiEncoderRanker(torch.nn.Module):
         if cand_encs is not None:
 
             if self.params["classification_head"] == "som":
+                # ctxt_reshaped = embedding_late_interaction_ctxt.reshape(embedding_late_interaction_ctxt.size(0)*embedding_late_interaction_ctxt.size(1), \
+                # embedding_late_interaction_ctxt.size(2)).to(device)
+                # cands_reshaped = embedding_late_interaction_cands.reshape(embedding_late_interaction_cands.size(0)* embedding_late_interaction_cands.size(1)\
+                # , embedding_late_interaction_cands.size(2)).to(device)
+                # output = torch.mm(ctxt_reshaped, cands_reshaped.t())
+                # output = output.reshape(embedding_late_interaction_ctxt.size(0)*embedding_late_interaction_ctxt.size(1), embedding_late_interaction_cands.size(0) , \
+                # embedding_late_interaction_cands.size(1)).max(-1)[0]
+                # output = output.t().reshape(embedding_late_interaction_cands.size(0)*embedding_late_interaction_ctxt.size(0), embedding_late_interaction_ctxt.size(1))
+                # scores = torch.sum(output, dim = -1).reshape(embedding_late_interaction_cands.size(0), embedding_late_interaction_ctxt.size(0)).t()
+                # print(scores.shape)
                 batch_size = 32
                 scores = None
                 for i in range(0, embedding_late_interaction_cands.size(0), batch_size):
-                    batch = embedding_late_interaction_cands[i:i+batch_size].to(device)
+                    batch = embedding_late_interaction_cands[i:i+batch_size]                
                     ctxt_reshaped = embedding_late_interaction_ctxt.reshape(embedding_late_interaction_ctxt.size(0)*embedding_late_interaction_ctxt.size(1), \
-                    embedding_late_interaction_ctxt.size(2))
+                    embedding_late_interaction_ctxt.size(2)).cpu()
                     cands_reshaped = batch.reshape(batch.size(0)* batch.size(1)\
                     , batch.size(2))
                     output = torch.mm(ctxt_reshaped, cands_reshaped.t())
@@ -241,10 +278,27 @@ class BiEncoderRanker(torch.nn.Module):
                         scores = torch.sum(output, dim = -1).reshape(batch.size(0), embedding_late_interaction_ctxt.size(0)).t().cpu()
                     else:
                         scores = torch.cat([scores, torch.sum(output, dim = -1).reshape(batch.size(0), embedding_late_interaction_ctxt.size(0)).t().cpu()], dim = -1) 
-            else:
-                scores=cls_ctxt.mm(cls_cands.t()) 
-            return scores, embedding_ctxt, embedding_late_interaction_ctxt
+            elif self.params["classification_head"] == "extend_multi":
+                pass
+            elif self.params["classification_head"] == "mlp":
+                num_ctxt = cls_ctxt.size(0)
+                num_cands = cls_cands.size(0)
+                cls_ctxt = cls_ctxt.unsqueeze(1) # (64, 1, 768)
+                cls_cands = cls_cands.unsqueeze(0) # (1, # of cands, 768)
+                # Expand tensors using broadcasting
+                cls_ctxt = cls_ctxt.expand(-1, num_cands, -1)
+                cls_cands = cls_cands.expand(num_ctxt, -1, -1)
+                # Reshape tensors to (64*64, 2)
+                cls_ctxt = cls_ctxt.reshape(num_ctxt*num_cands, 768)
+                cls_cands = cls_cands.reshape(num_ctxt*num_cands, 768)
 
+                # Stack the tensors along the second dimension
+                input = torch.stack([cls_ctxt, cls_cands], dim=1)
+                scores = self.model.module.mlplayer(input)
+                scores = scores.reshape(num_ctxt, num_cands)
+            elif self.params["classification_head"] == "dot":
+                scores=cls_ctxt.mm(cls_cands.t())
+            return scores, embedding_ctxt, embedding_late_interaction_ctxt
         # Train time. We compare with all elements of the batch
         token_idx_cands, segment_idx_cands, mask_cands = to_bert_input(
             cand_vecs, self.NULL_IDX
@@ -264,7 +318,6 @@ class BiEncoderRanker(torch.nn.Module):
             if self.params["classification_head"]=="mlp":
                 cls_ctxt = cls_ctxt.unsqueeze(1) # (64, 1, 768)
                 cls_cands = cls_cands.unsqueeze(0) # (1, 64, 768)
-
                 # Expand tensors using broadcasting
                 cls_ctxt = cls_ctxt.expand(batch_size,batch_size, 768)
                 cls_cands = cls_cands.expand(batch_size, batch_size, 768)
@@ -276,21 +329,52 @@ class BiEncoderRanker(torch.nn.Module):
                 input = torch.stack([cls_ctxt, cls_cands], dim=1)
                 scores = self.model.module.mlplayer(input)
                 scores = scores.reshape(batch_size, batch_size)
+            elif self.params["classification_head"]=="extend_multi":
+                # ToDo: add separate token
+                cls_ctxt = cls_ctxt.unsqueeze(-2)
+                cls_cands = cls_cands.expand(batch_size, -1, -1)
+                input = torch.cat([cls_ctxt, cls_cands], dim = -2)
+                attention_result = self.model.module.transformerencoder(input)
+                scores = self.model.module.linearhead(attention_result[:,-batch_size:,:])
+                scores = scores.squeeze(-1)
+            elif self.params["classification_head"]=="extend_multi_full":
+                # ToDo: add separate token
+                #embedding_late_interaction: (64, 128, 768)
+                cls_cands = cls_cands.expand(batch_size, -1, -1) # (64, 64, 768)
+                sep_embedding = self.model.module.sep_embedding.expand(batch_size, -1, -1)
+                input = torch.cat((embedding_late_interaction_ctxt, sep_embedding, cls_cands), dim = -2) # (64, 128 + 64, 768)
+                attention_result = self.model.module.transformerencoder(input)
+                scores = self.model.module.linearhead(attention_result[:,-batch_size:,:])
+                scores = scores.squeeze(-1)
             elif self.params["classification_head"] == "som":
-                # (64, 1, 128, 768)
-                embedding_late_interaction_ctxt = embedding_late_interaction_ctxt.unsqueeze(1)
-                # (1, 64, 128, 768)
-                embedding_late_interaction_cands = embedding_late_interaction_cands.unsqueeze(0)
-                # expand to (64, 64, 128, 768)
-                embedding_late_interaction_ctxt = embedding_late_interaction_ctxt.expand(batch_size,batch_size, 128, 768)
-                embedding_late_interaction_cands = embedding_late_interaction_cands.expand(batch_size,batch_size, 128, 768)
-                # reshape to (64*64, 128, 768)
-                embedding_late_interaction_ctxt = embedding_late_interaction_ctxt.reshape(batch_size*batch_size, 128, 768)
-                embedding_late_interaction_cands = embedding_late_interaction_cands.reshape(batch_size*batch_size, 128, 768)
-                output = torch.bmm(embedding_late_interaction_ctxt, embedding_late_interaction_cands.transpose(1, 2))
-                scores = torch.max(output, dim = -1)[0]
-                scores = torch.sum(scores, dim = -1)
-                scores = scores.reshape(batch_size, batch_size)
+                scores = None
+                ctxt_reshaped = embedding_late_interaction_ctxt.reshape(embedding_late_interaction_ctxt.size(0)*embedding_late_interaction_ctxt.size(1), \
+                embedding_late_interaction_ctxt.size(2))
+                cands_reshaped = embedding_late_interaction_cands.reshape(embedding_late_interaction_cands.size(0)* embedding_late_interaction_cands.size(1)\
+                , embedding_late_interaction_cands.size(2))
+                output = torch.mm(ctxt_reshaped, cands_reshaped.t())
+                output = output.reshape(embedding_late_interaction_ctxt.size(0)*embedding_late_interaction_ctxt.size(1), embedding_late_interaction_cands.size(0) , \
+                embedding_late_interaction_cands.size(1)).max(-1)[0]
+                output = output.t().reshape(embedding_late_interaction_cands.size(0)*embedding_late_interaction_ctxt.size(0), embedding_late_interaction_ctxt.size(1))
+                if scores is None:
+                    scores = torch.sum(output, dim = -1).reshape(embedding_late_interaction_cands.size(0), embedding_late_interaction_ctxt.size(0)).t()
+                else:
+                    scores = torch.cat([scores, torch.sum(output, dim = -1).reshape(embedding_late_interaction_cands.size(0), embedding_late_interaction_ctxt.size(0)).t()], dim = -1) 
+
+                # # (64, 1, 128, 768)
+                # embedding_late_interaction_ctxt = embedding_late_interaction_ctxt.unsqueeze(1)
+                # # (1, 64, 128, 768)
+                # embedding_late_interaction_cands = embedding_late_interaction_cands.unsqueeze(0)
+                # # expand to (64, 64, 128, 768)
+                # embedding_late_interaction_ctxt = embedding_late_interaction_ctxt.expand(batch_size,batch_size, 128, 768)
+                # embedding_late_interaction_cands = embedding_late_interaction_cands.expand(batch_size,batch_size, 128, 768)
+                # # reshape to (64*64, 128, 768)
+                # embedding_late_interaction_ctxt = embedding_late_interaction_ctxt.reshape(batch_size*batch_size, 128, 768)
+                # embedding_late_interaction_cands = embedding_late_interaction_cands.reshape(batch_size*batch_size, 128, 768)
+                # output = torch.bmm(embedding_late_interaction_ctxt, embedding_late_interaction_cands.transpose(1, 2))
+                # scores = torch.max(output, dim = -1)[0]
+                # scores = torch.sum(scores, dim = -1)
+                # scores = scores.reshape(batch_size, batch_size)
             # train on random negatives
             else:
                 # train on hard negatives 
