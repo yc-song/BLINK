@@ -260,6 +260,18 @@ class BlinkParser(argparse.ArgumentParser):
             help="The path to the train data.",
         )
         parser.add_argument(
+            "--candidate_path",
+            default="models/zeshel/top64_candidates/",
+            type=str,
+            help="The path to the train data.",
+        )
+        parser.add_argument(
+            "--type_cands",
+            default="random",
+            type=str,
+            help="random, mixed, hard",
+        )
+        parser.add_argument(
             "--output_path",
             default=config["output_path"],
             type=str,
@@ -293,6 +305,14 @@ class BlinkParser(argparse.ArgumentParser):
             type=int,
             help="first dimension",
         )
+        parser.add_argument(
+            "--cands_ratio",
+            default=0.5,
+            type=int,
+            help="random negative ratio",
+        )
+        
+
         parser.add_argument(
             "--cpu",
             type = str2bool,

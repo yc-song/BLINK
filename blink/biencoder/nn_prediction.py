@@ -95,9 +95,14 @@ def get_topk_predictions(
                 None, 
                 cand_encs=cand_encode_list[src],
                 cls_cands=cand_cls_list[src],
-                embedding_late_interaction_cands = cand_encode_late_interaction[src]
             ) #scores: (batch_size, each_world_size)
-            values, indicies = scores.topk(top_k)
+            if top_k == -1:
+                values = scores
+                indicies = torch.arange(scores.size(1)).expand(scores.size(0), -1)
+                # values, indicies = scores.sort(descending = True)  
+            else:
+                values, indicies = scores.topk(top_k)
+
             old_src = src
 
 
@@ -113,14 +118,16 @@ def get_topk_predictions(
                         context_input[[i]], 
                         None,
                         cand_encs=cand_encode_list[src].to(device),
-                        cls_cands=cand_cls_list[src].to(device),
-                        embedding_late_interaction_cands = cand_encode_late_interaction[src]
+                        cls_cands=cand_cls_list[src].to(device)
                     )
-                    value, inds = new_scores.topk(top_k)
+                    if top_k == -1:
+                        value = new_scores
+                        inds = torch.arange(new_scores.size(1)).unsqueeze(0)
+                    else:
+                        value, inds = new_scores.topk(top_k)
                     inds = inds[0]
                     value = value[0]
             else:
-                # not the same domain, need to re-do
                 src = srcs[i].item()
                 new_scores, _, _ = reranker.score_candidate(
                     context_input[[i]], 
@@ -129,14 +136,18 @@ def get_topk_predictions(
                     cls_cands=cand_cls_list[src].to(device),
                     embedding_late_interaction_cands = cand_encode_late_interaction[src]
                 )
-                value, inds = new_scores.topk(top_k)
+                if top_k == -1:
+                    value = new_scores
+                    inds = torch.arange(new_scores.size(1)).unsqueeze(0)
+                    # value, inds = new_scores.sort(descending = True)  
+                else:
+                    value, inds = new_scores.topk(top_k)
                 inds = inds[0]
-                value = value[0]            
+                value = value[0]  
             pointer = -1
-            for j in range(top_k):
-                if inds[j].item() == label_ids[i].item():
-                    pointer = j
-                    break
+            pointer_temp = (inds == label_ids[i].item()).nonzero(as_tuple=True)[0]
+            if pointer_temp.size(0) != 0:
+                pointer = pointer_temp.item()
             stats[src].add(pointer)
             if pointer == -1:
                 continue
@@ -190,14 +201,21 @@ def get_topk_predictions(
 
     nn_context = torch.FloatTensor(nn_context) # (10000,1024)
     nn_labels = torch.LongTensor(nn_labels)
+    print(nn_idxs)
+    max_length = max(len(sublist) for sublist in nn_idxs)
+    # As inference is carried out on each world. Dimension mismatch occurs b/w instances.
+    # Assign largest long to mismatching indices 
+    nn_idxs = [sublist + [torch.iinfo(torch.long).max] * (max_length - len(sublist)) for sublist in nn_idxs]
     nn_idxs = torch.LongTensor(nn_idxs)
+    # For the same reason, assign -inf to mismatching scores to prevent them from drawn at sampling
+    nn_scores = [sublist + [-float('inf')] * (max_length - len(sublist)) for sublist in nn_scores]
     nn_scores = torch.FloatTensor(nn_scores)
-    # print(nn_worlds)
     nn_data = {
         'context_vecs': nn_context,
         'labels': nn_labels,
         'nn_scores': nn_scores,
-        'indexes': nn_idxs
+        'indexes': nn_idxs,
+        'cumulative_index': cumulative_idx
     }
     # print("candidate", nn_data["candidate_vecs"])
     if save_predictions:

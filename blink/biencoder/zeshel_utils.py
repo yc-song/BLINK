@@ -69,7 +69,10 @@ class Stats():
         self.rank = [1, 4, 8, 16, 32, 64, 100, 128, 256, 512, 1000]
         self.LEN = len(self.rank) 
         self.hits = [0]*self.LEN
-        self.top_k = top_k
+        if top_k == -1:
+            self.top_k = 1000
+        else:
+            self.top_k = top_k
 
 
     def add(self, idx):

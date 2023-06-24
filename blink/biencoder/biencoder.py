@@ -331,8 +331,9 @@ class BiEncoderRanker(torch.nn.Module):
                 scores = scores.reshape(batch_size, batch_size)
             elif self.params["classification_head"]=="extend_multi":
                 # ToDo: add separate token
-                cls_ctxt = cls_ctxt.unsqueeze(-2)
-                cls_cands = cls_cands.expand(batch_size, -1, -1)
+                num_slice = int(cls_ctxt.size(0)/self.params["top_k"])
+                cls_ctxt = cls_ctxt[::self.params["top_k"], :].unsqueeze(-2)
+                cls_cands = cls_cands.reshape(cls_ctxt.size(0), self.params["top_k"], cls_cands.size(-1))
                 input = torch.cat([cls_ctxt, cls_cands], dim = -2)
                 attention_result = self.model.module.transformerencoder(input)
                 scores = self.model.module.linearhead(attention_result[:,-batch_size:,:])
@@ -393,7 +394,7 @@ class BiEncoderRanker(torch.nn.Module):
         scores = self.score_candidate(context_input, cand_input, flag)
         bs = scores[0].size(0)
         if label_input is None:
-            target = torch.LongTensor(torch.arange(bs))
+            target = torch.zeros(bs).long()
             target = target.to(self.device)
             loss = F.cross_entropy(scores[0], target, reduction="mean")
         else:
