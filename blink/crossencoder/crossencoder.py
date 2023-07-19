@@ -21,14 +21,15 @@ from transformers.modeling_outputs import (
     SequenceClassifierOutput,
     TokenClassifierOutput,
 )
+# Import adapter-related modules
 from transformers.adapters.context import ForwardContext
 from transformers.adapters.composition import adjust_tensors_for_parallel
+from transformers.adapters.models.bert.adapter_model import BertAdapterModel
+from transformers.adapters import BertAdapterModel, AutoAdapterModel
 from collections import OrderedDict
 from tqdm import tqdm
 CONFIG_NAME = "config.json"
 WEIGHTS_NAME = "pytorch_model.bin"
-from transformers.adapters.models.bert.adapter_model import BertAdapterModel
-from transformers.adapters import BertAdapterModel, AutoAdapterModel
 # from transformers.models.bert.modeling_bert import (
 #     BertPreTrainedModel,
 #     BertConfig,
@@ -654,6 +655,7 @@ class ExtendExtensionRanker(torch.nn.Module):
         if self.params["extend_bert"]:
             config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
             self.model = ExtendExtensionBertModule.from_pretrained("bert-base-cased", config = config)
+            # Add your new adapter to self.model and set it as active status when initializing the class
             self.model.add_adapter('extend-adapter')
             self.model.active_adapters = 'extend-adapter'
             self.model = self.model.to(self.device)
@@ -771,6 +773,7 @@ class MlpwithBiEncoderModule(torch.nn.Module):
                 config = BertConfig.from_pretrained("bert-base-cased", output_hidden_states=True)
                 ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
                 cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
+                # add adapter to declared bert class
                 ctxt_bert.add_adapter('ctxt-bert-adapter')
                 cand_bert.add_adapter('cand-bert-adapter')
                 ctxt_bert.train_adapter('ctxt-bert-adapter')
