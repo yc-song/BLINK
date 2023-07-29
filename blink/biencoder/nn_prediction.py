@@ -9,11 +9,12 @@ import json
 import logging
 import torch
 from tqdm import tqdm
-
+import numpy as np
+import os
 import blink.candidate_ranking.utils as utils
 from blink.biencoder.zeshel_utils import WORLDS, Stats
-
-
+from blink.biencoder.biencoder import to_bert_input, BiEncoderRanker
+from transformers.models.bert.modeling_bert import BertModel
 def get_topk_predictions(
     reranker,
     train_dataloader,
@@ -27,7 +28,10 @@ def get_topk_predictions(
     save_predictions=False,
     params=None,
     cand_encode_late_interaction = None,
-    split = 0
+    split = 0,
+    candidate_pool_ids = None,
+    mention_ids = None,
+    candidate_encode_list_frozen = None
 ):
     reranker.model.eval()
     device = reranker.device
@@ -36,12 +40,18 @@ def get_topk_predictions(
         iter_ = train_dataloader
     else:
         iter_ = tqdm(train_dataloader)
+    if params['freeze_bert']:
+        bert_path = params["path_to_model"]
+        params["path_to_model"] = None
+        reranker_frozen = BiEncoderRanker(params)
+        params["path_to_model"] = bert_path
     nn_context = []
     nn_candidates = []
     nn_labels = []
     nn_worlds = []
     nn_scores = []
     nn_idxs = []
+    cands = []
     stats = {}
     if params["mode"] == "valid":
         src_minus = 8
@@ -49,7 +59,6 @@ def get_topk_predictions(
         src_minus = 12
     else:
         src_minus = 0
-            
     if is_zeshel:
         world_size = len(WORLDS)
         cumulative_idx = [0]
@@ -89,7 +98,7 @@ def get_topk_predictions(
             src = 0
         cand_encode_list[src] = cand_encode_list[src].to(device)
         cand_cls_list[src] = cand_cls_list[src].to(device)
-        if params["classification_head"] == "dot":
+        if params["classification_head"] == "dot" or params["classification_head"] == "extend_multi":
             scores, embedding_ctxt, embedding_late_interaction_ctxt = reranker.score_candidate(
                 context_input, 
                 None, 
@@ -98,8 +107,8 @@ def get_topk_predictions(
             ) #scores: (batch_size, each_world_size)
             if top_k == -1:
                 values = scores
-                indicies = torch.arange(scores.size(1)).expand(scores.size(0), -1)
-                # values, indicies = scores.sort(descending = True)  
+                # indicies = torch.arange(scores.size(1)).expand(scores.size(0), -1)
+                values, indicies = scores.sort(descending = True)  
             else:
                 values, indicies = scores.topk(top_k)
 
@@ -107,8 +116,10 @@ def get_topk_predictions(
 
 
         for i in range(context_input.size(0)):
+            if step == 0:
+                MENTION_SIZE = context_input.size(0)
             oid += 1
-            if params["classification_head"] == "dot":
+            if params["classification_head"] == "dot" or params["classification_head"] == "extend_multi":
                 inds = indicies[i]
                 value = values[i]
                 src = srcs[i].item()
@@ -122,7 +133,9 @@ def get_topk_predictions(
                     )
                     if top_k == -1:
                         value = new_scores
-                        inds = torch.arange(new_scores.size(1)).unsqueeze(0)
+                        # inds = torch.arange(new_scores.size(1)).unsqueeze(0)
+                        value, inds = new_scores.sort(descending = True)  
+
                     else:
                         value, inds = new_scores.topk(top_k)
                     inds = inds[0]
@@ -138,8 +151,8 @@ def get_topk_predictions(
                 )
                 if top_k == -1:
                     value = new_scores
-                    inds = torch.arange(new_scores.size(1)).unsqueeze(0)
-                    # value, inds = new_scores.sort(descending = True)  
+                    # inds = torch.arange(new_scores.size(1)).unsqueeze(0)
+                    value, inds = new_scores.sort(descending = True)  
                 else:
                     value, inds = new_scores.topk(top_k)
                 inds = inds[0]
@@ -149,17 +162,30 @@ def get_topk_predictions(
             if pointer_temp.size(0) != 0:
                 pointer = pointer_temp.item()
             stats[src].add(pointer)
-            if pointer == -1:
-                continue
 
+            if params["save_topk_nce"]:
+                mention_id = mention_ids[i + MENTION_SIZE*step]
+                candidate = {}
+                candidate['mention_id'] = mention_id
+                # candidate['mention_id'] = hex(mention_id).upper()[2:].rjust(16, "0")
+                all_entities = np.array(candidate_pool_ids[srcs[i].item()])
+                candidate['candidates'] = all_entities[inds.cpu()].tolist()
+                candidate['scores'] = value.tolist()
+                candidate['labels'] = pointer
+                cands.append(candidate)
                 # cur_candidates = candidate_pool[srcs[i].item()][inds]
             # else:
                 # cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
+            if pointer == -1:
+                continue 
             if save_predictions:
-                if params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
+                if params["freeze_bert"]:
+                   nn_context.append(reranker_frozen.encode_context(context_input[i].unsqueeze(0)).squeeze(-2).cpu().tolist())
+                elif params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
                     nn_context.append(context_input[i].cpu().tolist())#(1024)
                 elif params["architecture"] == "mlp_with_som" or params["architecture"] == "extend_multi":
                     nn_context.append(embedding_late_interaction_ctxt[i].cpu().tolist())#(1024)
+                
                     # if type(nn_context) is list:
                     #     nn_context = embedding_late_interaction_ctxt
                     # else:
@@ -198,60 +224,82 @@ def get_topk_predictions(
         res.extend(stats[src])
 
     logger.info(res.output())
+    if params["save_topk_nce"]:
+        cands_dir = os.path.join(
+                params['output_path'],
+                "top%d_candidates" % params['top_k'],
+            )
+        if not os.path.exists(cands_dir):
+            os.makedirs(cands_dir)
+        with open(os.path.join(cands_dir, 'candidates_%s.json' % params["mode"]), 'w') as f:
+            for item in cands:
+                f.write('%s\n' % json.dumps(item))
+        return
+    else:
+        if not save_predictions:
+            return output
+        nn_context = torch.FloatTensor(nn_context) # (10000,1024)
+        nn_labels = torch.LongTensor(nn_labels)
+        max_length = max(len(sublist) for sublist in nn_idxs)
+        # As inference is carried out on each world. Dimension mismatch occurs b/w instances.
+        # Assign largest long to mismatching indices 
+        nn_idxs = [sublist + [torch.iinfo(torch.long).max] * (max_length - len(sublist)) for sublist in nn_idxs]
+        nn_idxs = torch.LongTensor(nn_idxs)
+        # For the same reason, assign -inf to mismatching scores to prevent them from drawn at sampling
+        nn_scores = [sublist + [-float('inf')] * (max_length - len(sublist)) for sublist in nn_scores]
+        nn_scores = torch.FloatTensor(nn_scores)
+        nn_data = {
+            'context_vecs': nn_context,
+            'labels': nn_labels,
+            'nn_scores': nn_scores,
+            'indexes': nn_idxs,
+            'cumulative_index': cumulative_idx
+        }
+        # print("candidate", nn_data["candidate_vecs"])
+        if save_predictions:
+            print("context shape", nn_data["context_vecs"].shape)
+            print("score shape", nn_data["nn_scores"].shape)
+            print("index shape", nn_data["indexes"].shape)
+            print("labels", nn_data["labels"].shape)
+        if split == 0:
+            if params['freeze_bert']:
+                for i in range(len(cand_encode_list)):
+                    if i == 0:
+                        cand_encode_list_tensor = candidate_encode_list_frozen[i+src_minus]
+                    else:
+                        cand_encode_list_tensor = torch.cat([cand_encode_list_tensor, candidate_encode_list_frozen[i+src_minus]])
+                nn_data["candidate_vecs"] = cand_encode_list_tensor.to(device)        
 
-    nn_context = torch.FloatTensor(nn_context) # (10000,1024)
-    nn_labels = torch.LongTensor(nn_labels)
-    print(nn_idxs)
-    max_length = max(len(sublist) for sublist in nn_idxs)
-    # As inference is carried out on each world. Dimension mismatch occurs b/w instances.
-    # Assign largest long to mismatching indices 
-    nn_idxs = [sublist + [torch.iinfo(torch.long).max] * (max_length - len(sublist)) for sublist in nn_idxs]
-    nn_idxs = torch.LongTensor(nn_idxs)
-    # For the same reason, assign -inf to mismatching scores to prevent them from drawn at sampling
-    nn_scores = [sublist + [-float('inf')] * (max_length - len(sublist)) for sublist in nn_scores]
-    nn_scores = torch.FloatTensor(nn_scores)
-    nn_data = {
-        'context_vecs': nn_context,
-        'labels': nn_labels,
-        'nn_scores': nn_scores,
-        'indexes': nn_idxs,
-        'cumulative_index': cumulative_idx
-    }
-    # print("candidate", nn_data["candidate_vecs"])
-    if save_predictions:
-        print("context shape", nn_data["context_vecs"].shape)
-        print("score shape", nn_data["nn_scores"].shape)
-        print("index shape", nn_data["indexes"].shape)
-        print("labels", nn_data["labels"].shape)
-    if split == 0:
-        if params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
-            for i in range(len(cand_encode_list)):
-                if i == 0:
-                    candidate_pool_tensor = candidate_pool[i+src_minus]
-                else:
-                    candidate_pool_tensor = torch.cat([candidate_pool_tensor, candidate_pool[i+src_minus]])
+                 
+            elif params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
+                for i in range(len(cand_encode_list)):
+                    if i == 0:
+                        candidate_pool_tensor = candidate_pool[i+src_minus]
+                    else:
+                        candidate_pool_tensor = torch.cat([candidate_pool_tensor, candidate_pool[i+src_minus]])
 
-            nn_data["candidate_vecs"] = candidate_pool_tensor.to(device)
-        elif params["architecture"] == "mlp_with_som":
-            for i in range(len(cand_encode_list)):
-                if i == 0:
-                    cand_encode_late_interaction_tensor = cand_encode_late_interaction[i+src_minus]
-                else:
-                    cand_encode_late_interaction_tensor = torch.cat([cand_encode_late_interaction_tensor, cand_encode_late_interaction[i+src_minus]], dim=0)            
-            nn_data["candidate_vecs"] = cand_encode_late_interaction_tensor
-        else:
-            for i in range(len(cand_encode_list)):
-                if i == 0:
-                    cand_encode_list_tensor = cand_encode_list[i+src_minus]
-                else:
-                    cand_encode_list_tensor = torch.cat([cand_encode_list_tensor, cand_encode_list[i+src_minus]])
-            nn_data["candidate_vecs"] = cand_encode_list_tensor.to(device)        
+                nn_data["candidate_vecs"] = candidate_pool_tensor.to(device)
+            elif params["architecture"] == "mlp_with_som":
+                for i in range(len(cand_encode_list)):
+                    if i == 0:
+                        cand_encode_late_interaction_tensor = cand_encode_late_interaction[i+src_minus]
+                    else:
+                        cand_encode_late_interaction_tensor = torch.cat([cand_encode_late_interaction_tensor, cand_encode_late_interaction[i+src_minus]], dim=0)            
+                nn_data["candidate_vecs"] = cand_encode_late_interaction_tensor
+            
+            else:
+                for i in range(len(cand_encode_list)):
+                    if i == 0:
+                        cand_encode_list_tensor = cand_encode_list[i+src_minus]
+                    else:
+                        cand_encode_list_tensor = torch.cat([cand_encode_list_tensor, cand_encode_list[i+src_minus]])
+                nn_data["candidate_vecs"] = cand_encode_list_tensor.to(device)        
 
-        print("candidate", nn_data["candidate_vecs"].shape)
+            print("candidate", nn_data["candidate_vecs"].shape)
 
-    if is_zeshel:
-        nn_data["worlds"] = torch.LongTensor(nn_worlds)
-    print("worlds", nn_data["worlds"].shape)
-    
+        if is_zeshel:
+            nn_data["worlds"] = torch.LongTensor(nn_worlds)
+        print("worlds", nn_data["worlds"].shape)
+        
     return nn_data
 

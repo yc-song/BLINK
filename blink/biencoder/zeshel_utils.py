@@ -41,6 +41,9 @@ def load_entity_dict_zeshel(logger, params):
     elif params["mode"] == "valid":
         start_idx = 8
         end_idx = 12
+    elif params["mode"] == "coronation_street":
+        start_idx = 8
+        end_idx = 9
     else:
         start_idx = 12
         end_idx = 16
@@ -55,8 +58,9 @@ def load_entity_dict_zeshel(logger, params):
                 sample = json.loads(line.rstrip())
                 title = sample['title']
                 text = sample.get("text", "").strip()
-                doc_list.append((title, text))
-                if params["debug"] and len(doc_list) > 200:
+                document_id = sample['document_id']
+                doc_list.append((title, text, document_id))
+                if params["debug"] and len(doc_list) > 1000:
                     break
         logger.info("Load for world %s." % src)
         entity_dict[src_id] = doc_list
@@ -66,7 +70,7 @@ def load_entity_dict_zeshel(logger, params):
 class Stats():
     def __init__(self, top_k=1000):
         self.cnt = 0
-        self.rank = [1, 4, 8, 16, 32, 64, 100, 128, 256, 512, 1000]
+        self.rank = [1, 4, 8, 16, 32, 64, 100, 128, 200, 256, 512, 1024]
         self.LEN = len(self.rank) 
         self.hits = [0]*self.LEN
         if top_k == -1:

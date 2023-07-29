@@ -54,8 +54,6 @@ from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import ENT_START_TAG, ENT_END_TAG, ENT_TITLE_TAG
 from blink.crossencoder.mlp import MlpModule, MlpModel
 from blink.biencoder.biencoder import BiEncoderModule, BiEncoderRanker
-from blink.crossencoder.parallel import DataParallelModel, DataParallelCriterion
-from parallel import DataParallelModel, DataParallelCriterion
 
 def load_crossencoder(params):
     # Init model
@@ -289,10 +287,12 @@ class ExtendMultiModule(torch.nn.Module):
         self.top_k = 64
         self.multiplicative_parameters = torch.nn.Parameter(torch.eye(self.embed_dim).unsqueeze(0)) # (1, 768, 768)
         self.mlplayer = MlpModule(self.params).to(self.device)
-        self.transformerencoderlayer = torch.nn.TransformerEncoderLayer(self.embed_dim, self.n_heads, batch_first = True)
+        self.transformerencoderlayer = torch.nn.TransformerEncoderLayer(self.embed_dim, self.n_heads, dim_feedforward=self.embed_dim*4, batch_first = True)
         self.transformerencoder = torch.nn.TransformerEncoder(self.transformerencoderlayer, self.num_layers)
         self.attentionlayer = torch.nn.MultiheadAttention(self.embed_dim, self.n_heads, batch_first = True)
         self.classification_head = torch.nn.Linear(self.embed_dim, 1)
+        self.token_type_embeddings = nn.Embedding(2, self.embed_dim).to(self.device)
+
         # self.layer_norm = torch.nn.LayerNorm(self.embed_dim)
         # self.feedforward = nn.Sequential(
         #     nn.Linear(self.embed_dim, self.embed_dim),
@@ -304,6 +304,12 @@ class ExtendMultiModule(torch.nn.Module):
         # attention_result = self.layer_norm(input+attention_result)
         # linear_result = self.feedforward(attention_result)
         # attention_result = self.layer_norm(linear_result+attention_result)
+        token_type_context = torch.zeros(input.size(0), 128).int().to(self.device)
+        token_embedding_context = self.token_type_embeddings(token_type_context)
+        token_type_candidate = torch.ones(input.size(0), input.size(1)-128).int().to(self.device)
+        token_embedding_candidate = self.token_type_embeddings(token_type_candidate)
+        token_embedding_type = torch.cat([token_embedding_context, token_embedding_candidate], dim = 1)
+        input += token_embedding_type
         attention_result = self.transformerencoder(input)
         if self.params["classification_head"] == "dot":
             if self.params["pooling"] == "sum":
@@ -614,10 +620,12 @@ class ExtendExtensionModule(torch.nn.Module):
         self.embed_dim = 768
         self.num_layers = params["num_layers"]
         self.top_k = 64
-        self.transformerencoderlayer = torch.nn.TransformerEncoderLayer(self.embed_dim, self.n_heads, batch_first = True)
+        self.transformerencoderlayer = torch.nn.TransformerEncoderLayer(self.embed_dim, self.n_heads, dim_feedforward=self.embed_dim*4, batch_first = True)
         self.transformerencoder = torch.nn.TransformerEncoder(self.transformerencoderlayer, self.num_layers)
         self.attentionlayer = torch.nn.MultiheadAttention(self.embed_dim, self.n_heads, batch_first = True)
         self.classification_head = torch.nn.Linear(self.embed_dim, 1)
+        self.token_type_embeddings = nn.Embedding(2, self.embed_dim).to(self.device)
+
         # self.layer_norm = torch.nn.LayerNorm(self.embed_dim)
         # self.feedforward = nn.Sequential(
         #     nn.Linear(self.embed_dim, self.embed_dim),
@@ -630,6 +638,12 @@ class ExtendExtensionModule(torch.nn.Module):
         # attention_result = self.layer_norm(input+attention_result)
         # linear_result = self.feedforward(attention_result)
         # attention_result = self.layer_norm(linear_result+attention_result)
+        token_type_context = torch.zeros(input.size(0), 1).int().to(self.device)
+        token_embedding_context = self.token_type_embeddings(token_type_context)
+        token_type_candidate = torch.ones(input.size(0), input.size(1)-1).int().to(self.device)
+        token_embedding_candidate = self.token_type_embeddings(token_type_candidate)
+        token_embedding_type = torch.cat([token_embedding_context, token_embedding_candidate], dim = 1)
+        input += token_embedding_type
         attention_result = self.transformerencoder(input)
         if self.params["classification_head"] == "dot":
             context_input = attention_result[:,0,:].unsqueeze(1)
@@ -792,6 +806,7 @@ class MlpwithBiEncoderModule(torch.nn.Module):
             tokenizer,
             layer_pulled=params["pull_from_layer"],
             add_linear=params["add_linear"],
+            params = params
         )
         self.cand_encoder = BertEncoder(
             cand_bert,
@@ -799,7 +814,14 @@ class MlpwithBiEncoderModule(torch.nn.Module):
             tokenizer,
             layer_pulled=params["pull_from_layer"],
             add_linear=params["add_linear"],
+            params = params
         )
+        if params["freeze_bert"]:
+            for param in self.context_encoder.parameters():
+                param.requires_grad = False
+            for param in self.cand_encoder.parameters():
+                param.requires_grad = False
+            
         self.config = ctxt_bert.config
         self.params = params
 

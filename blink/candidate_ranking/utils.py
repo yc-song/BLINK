@@ -88,7 +88,6 @@ def eval_precision_bm45_dataloader(dataloader, ks=[1, 5, 10], number_of_samples=
 
 def accuracy(out, labels):
     outputs = np.argmax(out, axis=1)
-    # print("outputs", outputs)
     # twomax = np.partition(out, -2)[:, -2:].T
     # default = -1
     # outputs=np.where(twomax[0] != twomax[1], np.argmax(out, -1), default)

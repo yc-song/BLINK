@@ -117,7 +117,15 @@ class BlinkParser(argparse.ArgumentParser):
             help="number of layers for mlp structure",
         )
         parser.add_argument(
+            "--save_topk_nce",
+            action = "store_true",
+            help="Binary cross entropy loss or multi class cross entropy loss.",
+        )
+        parser.add_argument(
             "--with_mlp", action="store_true", help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
+            "--freeze_bert", action="store_true", help="freeze bert for linear probe."
         )
         parser.add_argument(
             "--pooling", type=str, default="cls", help="Whether to add mlp layers on top of Bi-encoder."
@@ -206,6 +214,13 @@ class BlinkParser(argparse.ArgumentParser):
         parser.add_argument(
             "--path_to_mlpmodel",
             default=None,
+            type=str,
+            required=False,
+            help="The full path to the mlp model to load. (in case of mlp-with-bert model)",
+        )
+        parser.add_argument(
+            "--path_to_mention",
+            default='./data/mentions/',
             type=str,
             required=False,
             help="The full path to the mlp model to load. (in case of mlp-with-bert model)",
@@ -302,6 +317,12 @@ class BlinkParser(argparse.ArgumentParser):
         parser.add_argument(
             "--dim_red",
             default=config["dim_red"],
+            type=int,
+            help="first dimension",
+        )
+        parser.add_argument(
+            "--self_evaluate",
+            default=False,
             type=int,
             help="first dimension",
         )

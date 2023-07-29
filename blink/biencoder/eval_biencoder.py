@@ -53,18 +53,19 @@ def get_candidate_pool_tensor_zeshel(
     logger,
 ):
     candidate_pool = {}
+    candidate_pool_ids = {}
     for src in range(len(WORLDS)):
         if entity_dict.get(src, None) is None:
             continue
         logger.info("Get candidate desc to id for pool %s" % WORLDS[src])
-        candidate_pool[src] = get_candidate_pool_tensor(
+        candidate_pool[src], candidate_pool_ids[src] = get_candidate_pool_tensor(
             entity_dict[src],
             tokenizer,
             max_seq_length,
             logger,
         )
 
-    return candidate_pool
+    return candidate_pool, candidate_pool_ids
 
 
 def get_candidate_pool_tensor_helper(
@@ -99,9 +100,10 @@ def get_candidate_pool_tensor(
     # TODO: add multiple thread process
     logger.info("Convert candidate text to id")
     cand_pool = [] 
+    cand_pool_ids = []
     for entity_desc in tqdm(entity_desc_list):
         if type(entity_desc) is tuple:
-            title, entity_text = entity_desc
+            title, entity_text, document_id = entity_desc
         else:
             title = None
             entity_text = entity_desc
@@ -112,9 +114,12 @@ def get_candidate_pool_tensor(
                 title,
         )
         cand_pool.append(rep["ids"])
+        cand_pool_ids.append(document_id)
+
 
     cand_pool = torch.LongTensor(cand_pool) 
-    return cand_pool
+
+    return cand_pool, cand_pool_ids
 
 
 def encode_candidate(
@@ -196,13 +201,14 @@ def load_or_generate_candidate_pool(
             logger.info("Loading pre-generated candidate pool from: ")
             logger.info(cand_pool_path+"/cand_pool_"+params["mode"]+".pt")
             candidate_pool = torch.load(cand_pool_path+"/cand_pool_"+params["mode"]+".pt")
+            candidate_pool_ids = torch.load(cand_pool_path+"/cand_pool_ids_"+params["mode"]+".pt")
+
         except:
             logger.info("Loading failed. Generating candidate pool")
-
     if candidate_pool is None:
         #compute candidate pool from entity list
         entity_desc_list = load_entity_dict(logger, params, is_zeshel)
-        candidate_pool = get_candidate_pool_tensor_helper(
+        candidate_pool, candidate_pool_ids = get_candidate_pool_tensor_helper(
             entity_desc_list,
             tokenizer,
             params["max_cand_length"],
@@ -214,8 +220,9 @@ def load_or_generate_candidate_pool(
             logger.info("Saving candidate pool.")
             os.makedirs(cand_pool_path, exist_ok = True)
             torch.save(candidate_pool, cand_pool_path+"/cand_pool_"+params["mode"]+".pt")
-
-    return candidate_pool
+            torch.save(candidate_pool_ids, cand_pool_path+"/cand_pool_ids_"+params["mode"]+".pt")
+            
+    return candidate_pool, candidate_pool_ids
 
 
 def main(params):
@@ -234,11 +241,11 @@ def main(params):
     cand_encode_path = params.get("cand_encode_path", None)
     cand_cls_path = params.get("cand_cls_path", None)
 
-    
+    candidate_encoding_frozen = None
     # candidate encoding is not pre-computed. 
     # load/generate candidate pool to compute candidate encoding.
     cand_pool_path = params.get("cand_pool_path", None)
-    candidate_pool = load_or_generate_candidate_pool(
+    candidate_pool, candidate_pool_ids = load_or_generate_candidate_pool(
         tokenizer,
         params,
         logger,
@@ -258,6 +265,11 @@ def main(params):
                 cand_encode_late_interaction = torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+"_late_interaction.pt")
             else:
                 cand_encode_late_interaction = None
+            if params["freeze_bert"]:
+                candidate_encoding_frozen = torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+"_frozen.pt")
+                candidate_cls_frozen=torch.load(cand_encode_path+"/cand_enc_"+params["mode"]+"_cls_frozen.pt")
+
+
         except:
             logger.info("Loading failed. Generating candidate encoding.")
 
@@ -269,20 +281,36 @@ def main(params):
             silent=params["silent"],
             logger=logger,
             is_zeshel=params.get("zeshel", None)
-            
         )
+        candidate_encoding_frozen = None
+        candidate_cls_frozen = None
+        cand_encode_late_interaction_frozen = None
+        if params["freeze_bert"]:
+            bert_path = params["path_to_model"]
+            params["path_to_model"] = None
+            reranker_frozen = BiEncoderRanker(params)
+            candidate_encoding_frozen, candidate_cls_frozen, cand_encode_late_interaction_frozen = encode_candidate(
+            reranker_frozen,
+            candidate_pool,
+            params["encode_batch_size"],
+            silent=params["silent"],
+            logger=logger,
+            is_zeshel=params.get("zeshel", None)
+        )
+            params["path_to_model"] = bert_path
 
 
         if cand_encode_path is not None:
-                # Save candidate encoding to avoid re-compute
-
-            
+            # Save candidate encoding to avoid re-compute
             logger.info("Saving candidate encoding to file " + cand_encode_path)
             os.makedirs(cand_encode_path, exist_ok = True)
             torch.save(candidate_encoding, cand_encode_path+"/cand_enc_"+params["mode"]+".pt")
             torch.save(candidate_cls, cand_encode_path+"/cand_enc_"+params["mode"]+"_cls.pt")
-            torch.save(cand_encode_late_interaction, cand_encode_path+"/cand_enc_"+params["mode"]+"_late_interaction.pt")
-
+            # torch.save(cand_encode_late_interaction, cand_encode_path+"/cand_enc_"+params["mode"]+"_late_interaction.pt")
+            if params["freeze_bert"]:
+                torch.save(candidate_encoding_frozen, cand_encode_path+"/cand_enc_"+params["mode"]+"_frozen.pt")
+                torch.save(candidate_cls_frozen, cand_encode_path+"/cand_enc_"+params["mode"]+"_cls_frozen.pt")
+                # torch.save(cand_encode_late_interaction_frozen, cand_encode_path+"/cand_enc_"+params["mode"]+"_late_interaction_frozen.pt")
 
     test_samples = utils.read_dataset(params["mode"], params["data_path"])
     logger.info("Read %d test samples." % len(test_samples))
@@ -305,7 +333,6 @@ def main(params):
             sampler=test_sampler, 
             batch_size=params["eval_batch_size"]
         )
-        
         save_results = params.get("save_topk_result")
         new_data = nnquery.get_topk_predictions(
             reranker,
@@ -320,7 +347,10 @@ def main(params):
             save_results,
             params=params,
             cand_encode_late_interaction=cand_encode_late_interaction,
-            split = i
+            split = i,
+            candidate_pool_ids = candidate_pool_ids,
+            mention_ids = test_data["mention_id"],
+            candidate_encode_list_frozen = candidate_encoding_frozen
         )
 
 

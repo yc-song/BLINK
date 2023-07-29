@@ -37,6 +37,8 @@ import logging
 
 import blink.candidate_ranking.utils as utils
 import blink.biencoder.data_process as data
+from blink.biencoder.eval_biencoder import load_or_generate_candidate_pool
+from blink.biencoder.nn_prediction import get_topk_predictions
 from blink.biencoder.zeshel_utils import DOC_PATH, WORLDS, world_to_id
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import BlinkParser
@@ -119,29 +121,28 @@ def evaluate(
     eval_accuracy = 0.0
     nb_eval_examples = 0
     nb_eval_steps = 0
-
     for step, batch in enumerate(iter_):
         batch = tuple(t.to(device) for t in batch)
-        context_input, label_input, _ = batch
-
-        candidate_input = context_input[:,:,params["max_context_length"]:]
-        context_input = context_input[:,:,:params["max_context_length"]]
+        context_input, candidate_input, label_input, _ = batch
+        context_input = context_input.unsqueeze(dim = 1).expand(-1, params["top_k"], -1)
         context_input = context_input.reshape(context_input.size(0)*context_input.size(1), context_input.size(2))
         candidate_input = candidate_input.reshape(candidate_input.size(0)*candidate_input.size(1), candidate_input.size(2))
+        # print(context_input.shape, candidate_input.shape)
         with torch.no_grad():
-            eval_loss, logits = reranker(context_input, candidate_input)
+            eval_loss, logits = reranker(context_input, candidate_input, eval = True)
         logits = logits[0].detach().cpu().numpy()
+        label_input = label_input.detach().cpu().numpy()
         # Using in-batch negatives, the label ids are diagonal
         # label_ids = torch.LongTensor(
         #         torch.arange(params["eval_batch_size"])
         # ).numpy()
 
         tmp_eval_accuracy, _ = utils.accuracy(logits, label_input)
-
         eval_accuracy += tmp_eval_accuracy
 
-        nb_eval_examples += context_input.size(0)
+        nb_eval_examples += batch[0].size(0)
         nb_eval_steps += 1
+        print(eval_accuracy, nb_eval_examples)   
 
     normalized_eval_accuracy = eval_accuracy / nb_eval_examples
     logger.info("Eval accuracy: %.5f" % normalized_eval_accuracy)
@@ -201,6 +202,27 @@ def get_scheduler(params, optimizer, len_train_data, logger):
     logger.info(" Num warmup steps = %d", num_warmup_steps)
     return scheduler
 
+def distribution_sample(probs, num_cands, label_input):
+    label_input = label_input.unsqueeze(-1)
+    probs[torch.arange(probs.size(0)).unsqueeze(1), label_input] = -float('inf')
+    probs = torch.nn.functional.softmax(probs, dim = 1) 
+  
+    num_nonzero = (probs != 0).sum(1)
+    less_indices = (num_nonzero < num_cands)
+    min_num_nonzero = num_nonzero.min().item()
+    if min_num_nonzero < num_cands:
+        candidates = torch.zeros((probs.size(0), num_cands)).long().to(device)
+        candidates[less_indices] = torch.multinomial(probs[less_indices],
+                                                     num_cands,
+                                                     replacement=True)
+        if candidates[less_indices].size(0) != probs.size(0):
+            candidates[~less_indices] = torch.multinomial(probs[~less_indices],
+                                                          num_cands,
+                                                          replacement=False)
+    else:
+        candidates = torch.multinomial(probs, num_cands, replacement=False)
+    return candidates
+
 
 def main(params):
     if params["resume"]: 
@@ -243,63 +265,84 @@ def main(params):
         torch.cuda.manual_seed_all(seed)
 
     # Load train data
-    if params["type_cands"] != "random":
-        train_samples = utils.read_dataset("train", params["data_path"])
-        logger.info("Read %d train samples." % len(train_samples))
-        train_data, train_tensor_data = data.process_mention_data(
-            train_samples,
-            tokenizer,
-            params["max_context_length"],
-            params["max_cand_length"],
-            context_key=params["context_key"],
-            silent=params["silent"],
-            logger=logger,
-            debug=params["debug"],
-        )
-        if params["shuffle"]:
-            train_sampler = RandomSampler(train_tensor_data)
-        else:
-            train_sampler = SequentialSampler(train_tensor_data)
+    # if params["type_cands"] != "random":
+    #     train_samples = utils.read_dataset("train", params["data_path"])
+    #     logger.info("Read %d train samples." % len(train_samples))
+    #     try: 
+    #         logger.info('loading train mentions')
+    #         train_data = torch.load(params["path_to_mention"]+"train_data.pt")
+    #         train_tensor_data = torch.load(params["path_to_mention"]+"train_tensor_data.pt")
+    #     except:
+    #         logger.info('failed to load train entities')
+    #         train_data, train_tensor_data = data.process_mention_data(
+    #         train_samples,
+    #         tokenizer,
+    #         params["max_context_length"],
+    #         params["max_cand_length"],
+    #         context_key=params["context_key"],
+    #         silent=params["silent"],
+    #         logger=logger,
+    #         debug=params["debug"],
+    #         )
+    #         logger.info("Saving mentions to file " )
+    #         os.makedirs(params["path_to_mention"], exist_ok = True)
+    #         torch.save(train_data, params["path_to_mention"]+"train_data.pt")
+    #         torch.save(train_tensor_data, params["path_to_mention"]+"train_tensor_data.pt")
 
-        train_dataloader = DataLoader(
-            train_tensor_data, sampler=train_sampler, batch_size=train_batch_size
-        )
+    #     if params["shuffle"]:
+    #         train_sampler = RandomSampler(train_tensor_data)
+    #     else:
+    #         train_sampler = SequentialSampler(train_tensor_data)
+
+    #     train_dataloader = DataLoader(
+    #         train_tensor_data, sampler=train_sampler, batch_size=train_batch_size
+    #     )
+        # # Load and generate candidate pool
+        # train_candidate_pool = load_or_generate_candidate_pool(
+        # tokenizer,
+        # params,
+        # logger,
+        # cand_pool_path,
+        # )          
+
         # Load Hard Negs.
+    fname = os.path.join(params["candidate_path"], "train_hard.t7")
+    if params["cpu"]:
+        hard_data = torch.load(fname, map_location="cpu")
     else:
-        fname = os.path.join(params["candidate_path"], "train_hard.t7")
-        if params["cpu"]:
-            hard_data = torch.load(fname, map_location="cpu")
-        else:
-            hard_data = torch.load(fname)
-        context_input = hard_data["context_vecs"].int()
-        candidate_input_hard = hard_data["candidate_vecs"].int()
-        label_input = hard_data["labels"]
-        idxs = hard_data["indexes"]
-        world = hard_data["worlds"]
-        if params["debug"]:
-            max_n = -1
-            context_input = context_input[:max_n]
-            # candidate_input = candidate_input[:max_n]
-            label_input = label_input[:max_n]
-            idxs = idxs[:max_n]
+        hard_data = torch.load(fname)
+    context_input = hard_data["context_vecs"].int()
+    candidate_input_hard = hard_data["candidate_vecs"].int()
+    label_input = hard_data["labels"]
+    idxs = hard_data["indexes"]
+    scores = hard_data["nn_scores"]
+    world = hard_data["worlds"]
+    if params["debug"]:
+        max_n = -1
+        context_input = context_input[:max_n]
+        # candidate_input = candidate_input[:max_n]
+        label_input = label_input[:max_n]
+        idxs = idxs[:max_n]
 
-        if params["zeshel"]:
-            src_input = hard_data["worlds"][:len(context_input)]
-            train_tensor_data = TensorDataset(context_input, label_input, src_input, idxs)
-        else:
-            train_tensor_data = TensorDataset(context_input, label_input)
-        train_sampler = SequentialSampler(train_tensor_data)
+    if params["zeshel"]:
+        src_input = hard_data["worlds"][:len(context_input)]
+        train_tensor_data = TensorDataset(context_input, label_input, src_input, idxs, scores[:label_input.size(0)])
+    else:
+        train_tensor_data = TensorDataset(context_input, label_input)
+    train_sampler = SequentialSampler(train_tensor_data)
 
-        train_dataloader = DataLoader(
-            train_tensor_data, 
-            sampler=train_sampler, 
-            batch_size=params["train_batch_size"]
-        )
+    train_dataloader = DataLoader(
+        train_tensor_data, 
+        sampler=train_sampler, 
+        batch_size=params["train_batch_size"]
+    )
 
     # Load eval data
     # TODO: reduce duplicated code here
     max_seq_length = params["max_seq_length"]
     context_length = params["max_context_length"]
+       
+    # if params["type_cands"] == "hard_negative":
     fname = os.path.join(params["candidate_path"], "valid.t7")
     if params["cpu"]:
         valid_data = torch.load(fname, map_location="cpu")
@@ -310,19 +353,45 @@ def main(params):
     label_input = valid_data["labels"]
     idxs = valid_data["indexes"]
     world = valid_data["worlds"]
+    scores = valid_data["nn_scores"]
     if params["debug"]:
         max_n = 200
         context_input = context_input[:max_n]
         # candidate_input = candidate_input[:max_n]
         label_input = label_input[:max_n]
         idxs = idxs[:max_n]
-
-    context_input = modify(context_input, candidate_input, params, world, idxs)
+    candidate_input = candidate_input[idxs[:,:params["top_k"]]] # (B,top_k)
+# context_input = modify(context_input, candidate_input, params, world, idxs)
     if params["zeshel"]:
         src_input = valid_data["worlds"][:len(context_input)]
-        valid_tensor_data = TensorDataset(context_input, label_input, src_input)
+        valid_tensor_data = TensorDataset(context_input, candidate_input, label_input, src_input)
     else:
-        valid_tensor_data = TensorDataset(context_input, label_input)
+        valid_tensor_data = TensorDataset(context_input, candidate_input, label_input)
+    # else:
+    #     valid_samples = utils.read_dataset("valid", params["data_path"])
+    #     logger.info("Read %d valid samples." % len(valid_samples))
+    #     try: 
+    #         logger.info('loading valid mentions')
+    #         valid_data = torch.load(params["path_to_mention"]+"valid_data.pt")
+    #         valid_tensor_data = torch.load(params["path_to_mention"]+"valid_tensor_data.pt")
+    #     except:
+    #         logger.info('failed to load valid entities')
+    #         valid_data, valid_tensor_data = data.process_mention_data(
+    #         valid_samples,
+    #         tokenizer,
+    #         params["max_context_length"],
+    #         params["max_cand_length"],
+    #         context_key=params["context_key"],
+    #         silent=params["silent"],
+    #         logger=logger,
+    #         debug=params["debug"],
+    #         )
+    #         logger.info("Saving mentions to file " )
+    #         os.makedirs(params["path_to_mention"], exist_ok = True)
+    #         torch.save(valid_data, params["path_to_mention"]+"valid_data.pt")
+    #         torch.save(valid_tensor_data, params["path_to_mention"]+"valid_tensor_data.pt")
+
+
     valid_sampler = SequentialSampler(valid_tensor_data)
 
     valid_dataloader = DataLoader(
@@ -335,7 +404,6 @@ def main(params):
 
     num_rands = int(params["train_batch_size"] * params["cands_ratio"])
     num_hards = params["train_batch_size"] - num_rands
-    total_cands = candidate_input.size(0)
 
 
 
@@ -410,16 +478,42 @@ def main(params):
 
         for step, batch in enumerate(iter_):
             batch = tuple(t.to(device) for t in batch)
-            context_input, label_input, world, nn_idxs = batch
+            if len(batch) == 5:
+                context_input, label_input, world, nn_idxs, scores = batch
+            else:
+                context_input, label_input, world, nn_idxs = batch
             ### modify required here
             if params["type_cands"] == "random":
-                target_sets = nn_idxs[torch.arange(nn_idxs.size(0)), label_input].unsqueeze(-1) # (Batch_size,)
+                # batch = tuple(t.to(device) for t in batch)
+                # context_input, candidate_input, _, _ = batch
+                # loss, _ = reranker(context_input, candidate_input)
+                # target_sets = nn_idxs[torch.arange(nn_idxs.size(0)), label_input].unsqueeze(-1) # (Batch_size,)
                 # print(target_sets, target_sets.shape)
-                target_input = candidate_input_hard[target_sets]
+                target_input = candidate_input_hard[label_input].unsqueeze(-2)
                 # print(target_input, target_input.shape)
                 candidate_sets = select_random_samples(candidate_input_hard.size(0), context_input.size(0), params["top_k"]-1) # (batch_size, top_k-1)
+                # scores = scores[scores!=scores[target_sets]]
+                # print(scores, scores.shape)
+                # candidate_sets = distribution_sample(scores, 63, label_input)
                 # print(candidate_sets, candidate_sets.shape)
-                candidate_input= candidate_input_hard[candidate_sets] #(batch_size, batch_size-1, context_len)
+                candidate_input= candidate_input_hard[candidate_sets] #(batch_size, batch_size, context_len)
+                # print(candidate_input, candidate_input.shape)
+                candidate_input = torch.cat([target_input, candidate_input], dim = -2)
+                # print(candidate_input, candidate_in/put.shape)
+                context_input = context_input.unsqueeze(dim = 1).expand(-1, params["top_k"], -1)
+                context_input = context_input.reshape(context_input.size(0)*context_input.size(1), context_input.size(2))
+                candidate_input = candidate_input.reshape(candidate_input.size(0)*candidate_input.size(1), candidate_input.size(2))
+            elif params["type_cands"] == "hard_negative":
+                # target_sets = nn_idxs[torch.arange(nn_idxs.size(0)), label_input].unsqueeze(-1) # (Batch_size,)
+                # print(target_sets, target_sets.shape)
+                target_input = candidate_input_hard[label_input].unsqueeze(-2)
+                # print(target_input, target_input.shape)
+                # candidate_sets = select_random_samples(candidate_input_hard.size(0), context_input.size(0), params["top_k"]-1) # (batch_size, top_k-1)
+                # scores = scores[scores!=scores[target_sets]]
+                # print(scores, scores.shape)
+                candidate_sets = distribution_sample(scores, 63, label_input)
+                # print(candidate_sets, candidate_sets.shape)
+                candidate_input= candidate_input_hard[candidate_sets] #(batch_size, batch_size, context_len)
                 # print(candidate_input, candidate_input.shape)
                 candidate_input = torch.cat([target_input, candidate_input], dim = -2)
                 # print(candidate_input, candidate_in/put.shape)
@@ -516,13 +610,13 @@ def main(params):
 
     # save the best model in the parent_dir
     logger.info("Best performance in epoch: {}".format(best_epoch_idx))
-    params["path_to_model"] = os.path.join(
-        model_output_path, 
-        "epoch_{}".format(best_epoch_idx),
-        WEIGHTS_NAME,
-    )
-    reranker.load_model(params["path_to_model"])
-    utils.save_model(reranker.model, tokenizer, model_output_path, epoch_idx, optimizer)
+    # params["path_to_model"] = os.path.join(
+    #     model_output_path, 
+    #     "epoch_{}".format(best_epoch_idx),
+    #     WEIGHTS_NAME,
+    # )
+    # reranker.load_model(params["path_to_model"])
+    # utils.save_model(reranker.model, tokenizer, model_output_path, epoch_idx, optimizer)
 
     if params["evaluate"]:
         params["path_to_model"] = model_output_path

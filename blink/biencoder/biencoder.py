@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 #
 import os
+import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -38,9 +39,10 @@ class BiEncoderModule(torch.nn.Module):
             self.mlplayer = MlpModule(params).to(self.device)
         if params["anncur"]:
             config = BertConfig.from_pretrained(params["bert_model"], output_hidden_states=True)
-            ctxt_bert = BertModel.from_pretrained(params["bert_model"], config=config)
-            cand_bert = BertModel.from_pretrained(params['bert_model'], config=config)
+            ctxt_bert = BertModel.from_pretrained(params["bert_model"])
+            cand_bert = BertModel.from_pretrained(params['bert_model'])
         else:
+            # config = BertConfig.from_pretrained(params["bert_model"], output_hidden_states=True)
             ctxt_bert = BertModel.from_pretrained(params["bert_model"])
             cand_bert = BertModel.from_pretrained(params['bert_model'])
         ctxt_bert.resize_token_embeddings(len(tokenizer))
@@ -103,7 +105,14 @@ class BiEncoderModule(torch.nn.Module):
                 token_idx_cands, segment_idx_cands, mask_cands, data_type="candidate", params = self.params
             )
         return embedding_ctxt, embedding_cands, cls_ctxt, cls_cands, embedding_late_interaction_ctxt, embedding_late_interaction_cands
-
+    def extend_multi(self, xs, ys):
+        xs = xs.to(self.device) # (batch size, 1, embed_dim)
+        ys = ys.squeeze(dim = -2).to(self.device) #(batch_size, cands, 1, embed_dim)
+        input = torch.cat([xs, ys], dim = 1)
+        attention_result = self.transformerencoder(input)
+        scores = self.linearhead(attention_result[:,1:,:])
+        scores = scores.squeeze(-1)
+        return scores
 
 class BiEncoderRanker(torch.nn.Module):
     def __init__(self, params, shared=None):
@@ -118,10 +127,11 @@ class BiEncoderRanker(torch.nn.Module):
         self.tokenizer = BertTokenizer.from_pretrained(
             params["bert_model"], do_lower_case=params["lowercase"]
         )
-        if params["anncur"]:
-            self.tokenizer = BertTokenizer.from_pretrained(
-			"bert-base-uncased", do_lower_case=True
-		)
+
+        # if params["anncur"]:
+        #     self.tokenizer = BertTokenizer.from_pretrained(
+		# 	"bert-base-uncased", do_lower_case=True
+		# )
         special_tokens_dict = {
             "additional_special_tokens": [
                 ENT_START_TAG,
@@ -148,7 +158,7 @@ class BiEncoderRanker(torch.nn.Module):
     def load_model(self, fname, cpu=False):
         if self.params["anncur"]:
             if cpu:
-                state_dict = torch.load(fname, map_location=lambda storage, location: "cpu")["state_dict"]
+                state_dict = torch.load(fname, map_location="cpu")["state_dict"]
             else:
                 state_dict = torch.load(fname)["state_dict"]
             new_state_dict = OrderedDict()
@@ -210,9 +220,9 @@ class BiEncoderRanker(torch.nn.Module):
         token_idx_cands, segment_idx_cands, mask_cands = to_bert_input(
             cands, self.NULL_IDX
         )
-        embedding_context, _, _, _ = self.model(
+        embedding_context = self.model(
             token_idx_cands, segment_idx_cands, mask_cands, None, None, None
-        )
+        )[0]
         return embedding_context.cpu().detach()
 
     def encode_candidate(self, cands):
@@ -236,6 +246,7 @@ class BiEncoderRanker(torch.nn.Module):
         cand_encs=None,  # pre-computed candidate encoding.
         cls_cands=None,
         embedding_late_interaction_cands = None,
+        eval = False
     ):
         device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
@@ -250,6 +261,7 @@ class BiEncoderRanker(torch.nn.Module):
         # Candidate encoding is given, do not need to re-compute
         # Directly return the score of context encoding and candidate encoding
         if cand_encs is not None:
+            num_cands = cand_encs.size(0)
 
             if self.params["classification_head"] == "som":
                 # ctxt_reshaped = embedding_late_interaction_ctxt.reshape(embedding_late_interaction_ctxt.size(0)*embedding_late_interaction_ctxt.size(1), \
@@ -279,7 +291,54 @@ class BiEncoderRanker(torch.nn.Module):
                     else:
                         scores = torch.cat([scores, torch.sum(output, dim = -1).reshape(batch.size(0), embedding_late_interaction_ctxt.size(0)).t().cpu()], dim = -1) 
             elif self.params["classification_head"] == "extend_multi":
-                pass
+                scores = None
+                next_round_idxs = None
+                num_stages = int(math.log10(num_cands)/math.log10(4))
+                cls_ctxt = cls_ctxt.unsqueeze(1)
+                for stage in range(num_stages):
+                    if stage == 0:
+                        for i in range(int(num_cands/self.params["top_k"])+1):
+                            tmp_candidates_embed = cls_cands[self.params["top_k"]*i:min(self.params["top_k"]*(i+1),num_cands), :].unsqueeze(0).expand(cls_ctxt.size(0), -1, -1)
+                            if i == 0:
+                                scores = self.model.extend_multi(cls_ctxt, tmp_candidates_embed)
+                                scores = torch.nn.functional.softmax(scores, dim = 1)
+                                _, next_round_idxs = torch.topk(scores, int(self.params["top_k"]/4))
+                            else:
+                                tmp_scores = self.model.extend_multi(cls_ctxt, tmp_candidates_embed)
+                                tmp_scores = torch.nn.functional.softmax(tmp_scores, dim = 1)
+                                scores = torch.cat([scores, tmp_scores], dim = 1)
+                                _, tmp_next_round_idxs = torch.topk(tmp_scores, int(tmp_candidates_embed.size(1)/4))
+                                tmp_next_round_idxs = tmp_next_round_idxs + torch.tensor([self.params["top_k"]*i], device = self.device)
+                                next_round_idxs = torch.cat([next_round_idxs, tmp_next_round_idxs.squeeze(-1)], dim = 1)
+                    else:
+                        num_cands = next_round_idxs.size(1)
+                        if num_cands <= 64: break
+                        tmp_cls_cands = cls_cands[next_round_idxs.cpu()]
+                        previous_round_idxs = next_round_idxs
+                        for i in range(int(num_cands/self.params["top_k"])+1):
+                            tmp_candidates_embed = tmp_cls_cands[:,self.params["top_k"]*i:min(self.params["top_k"]*(i+1),num_cands), :]
+                            if i == 0:
+                                tmp_scores = self.model.extend_multi(cls_ctxt, tmp_candidates_embed)
+                                tmp_scores = torch.nn.functional.softmax(tmp_scores, dim = 1)
+                                _, tmp_next_round_idxs = torch.topk(tmp_scores, int(tmp_candidates_embed.size(1)/4))
+                                # next_round_idxs = torch.index_select(previous_round_idx, 1, next_round_idxs)
+                                next_round_idxs = torch.gather(previous_round_idxs, 1, tmp_next_round_idxs)
+                                # next_round_idxs = previous_round_idx[tmp_next_round_idxs]
+                            else:
+                                tmp_scores2 = self.model.extend_multi(cls_ctxt, tmp_candidates_embed)
+                                tmp_scores2 = torch.nn.functional.softmax(tmp_scores2, dim = 1)
+                                tmp_scores = torch.cat([tmp_scores, tmp_scores2], dim = 1)
+                                _, tmp_next_round_idxs = torch.topk(tmp_scores2, int(tmp_candidates_embed.size(1)/4))
+                                tmp_next_round_idxs = tmp_next_round_idxs + torch.tensor([self.params["top_k"]*i], device = self.device)
+                                tmp_next_round_idxs = torch.gather(previous_round_idxs, 1, tmp_next_round_idxs)
+                                next_round_idxs = torch.cat([next_round_idxs, tmp_next_round_idxs.squeeze(-1)], dim = 1)
+                       
+
+                        # Perform element-wise addition using broadcasting
+                        # print(previous_round_idxs.shape, tmp_scores.shape)
+                        for row in range(previous_round_idxs.size(0)):
+                                scores[row, previous_round_idxs[row]] += tmp_scores[row]
+                            # score를 다 더해줘야 함
             elif self.params["classification_head"] == "mlp":
                 num_ctxt = cls_ctxt.size(0)
                 num_cands = cls_cands.size(0)
@@ -330,14 +389,24 @@ class BiEncoderRanker(torch.nn.Module):
                 scores = self.model.module.mlplayer(input)
                 scores = scores.reshape(batch_size, batch_size)
             elif self.params["classification_head"]=="extend_multi":
+                # if eval:
                 # ToDo: add separate token
-                num_slice = int(cls_ctxt.size(0)/self.params["top_k"])
                 cls_ctxt = cls_ctxt[::self.params["top_k"], :].unsqueeze(-2)
                 cls_cands = cls_cands.reshape(cls_ctxt.size(0), self.params["top_k"], cls_cands.size(-1))
                 input = torch.cat([cls_ctxt, cls_cands], dim = -2)
                 attention_result = self.model.module.transformerencoder(input)
-                scores = self.model.module.linearhead(attention_result[:,-batch_size:,:])
-                scores = scores.squeeze(-1)
+                scores = self.model.module.linearhead(attention_result[:,1:,:])
+                scores = scores.squeeze(-1) # Train: (Batch, top_k, 768)
+                # else:
+                #     print(cls_ctxt, cls_ctxt.shape)
+                #     print(cls_cands, cls_cands.shape)
+                #     cls_ctxt = cls_ctxt.unsqueeze(-2)
+                #     cls_cands = cls_cands.expand(batch_size, -1, -1)
+                #     input = torch.cat([cls_ctxt, cls_cands], dim = -2)
+                #     attention_result = self.model.module.transformerencoder(input)
+
+                #     scores = self.model.module.linearhead(attention_result[:,1:,:])
+                #     scores = scores.squeeze(-1) # Train: (Batch, Batch, 768)
             elif self.params["classification_head"]=="extend_multi_full":
                 # ToDo: add separate token
                 #embedding_late_interaction: (64, 128, 768)
@@ -379,7 +448,14 @@ class BiEncoderRanker(torch.nn.Module):
             # train on random negatives
             else:
                 # train on hard negatives 
-                scores=cls_ctxt.mm(cls_cands.t())
+                if eval:
+                    # ToDo: add separate token
+                    num_slice = int(cls_ctxt.size(0)/self.params["top_k"])
+                    cls_ctxt = cls_ctxt[::self.params["top_k"], :].unsqueeze(-2)
+                    cls_cands = cls_cands.reshape(cls_ctxt.size(0), self.params["top_k"], cls_cands.size(-1))
+                    scores = torch.bmm(cls_ctxt, cls_cands.transpose(1,2)).squeeze(-2)
+                else:
+                    scores=cls_ctxt.mm(cls_cands.t())
         else:
             embedding_ctxt = embedding_ctxt.unsqueeze(1)  # batchsize x 1 x embed_size
             embedding_cands = embedding_cands.unsqueeze(2)  # batchsize x embed_size x 2
@@ -389,12 +465,13 @@ class BiEncoderRanker(torch.nn.Module):
 
     # label_input -- negatives provided
     # If label_input is None, train on in-batch negatives
-    def forward(self, context_input, cand_input, label_input=None):
+    def forward(self, context_input, cand_input, label_input=None, eval = False):
         flag = label_input is None
-        scores = self.score_candidate(context_input, cand_input, flag)
+        scores = self.score_candidate(context_input, cand_input, flag, eval=eval)
         bs = scores[0].size(0)
         if label_input is None:
             target = torch.zeros(bs).long()
+            # target = torch.LongTensor(torch.arange(bs))
             target = target.to(self.device)
             loss = F.cross_entropy(scores[0], target, reduction="mean")
         else:
@@ -413,3 +490,24 @@ def to_bert_input(token_idx, null_idx):
     # nullify elements in case self.NULL_IDX was not 0
     token_idx = token_idx * mask.long()
     return token_idx, segment_idx, mask
+
+# class extend_multi(nn.Module):
+#     def __init__(self, num_heads, num_layers):
+#         super().__init__()
+#         self.device = torch.device(
+#             "cuda" if torch.cuda.is_available() else "cpu"
+#         )
+#         self.num_heads = num_heads
+#         self.num_layers = num_layers
+#         self.embed_dim = 768
+#         self.transformerencoderlayer = torch.nn.TransformerEncoderLayer(self.embed_dim, self.num_heads, batch_first = True).to(self.device)
+#         self.transformerencoder = torch.nn.TransformerEncoder(self.transformerencoderlayer, self.num_layers).to(self.device)
+#         self.linearhead = torch.nn.Linear(self.embed_dim, 1).to(self.device)
+#     def forward(self, xs, ys):
+#         xs = xs.to(self.device) # (batch size, 1, embed_dim)
+#         ys = ys.squeeze(dim = -2).to(self.device) #(batch_size, cands, 1, embed_dim)
+#         input = torch.cat([xs, ys], dim = 1)
+#         attention_result = self.transformerencoder(input)
+#         scores = self.linearhead(attention_result[:,1:,:])
+#         scores = scores.squeeze(-1)
+#         return scores

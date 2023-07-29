@@ -136,6 +136,7 @@ def process_mention_data(
 
         label = sample[label_key]
         title = sample.get(title_key, None)
+        mention_id = sample["mention_id"]
         label_tokens = get_candidate_representation(
             label, tokenizer, max_cand_length, title,
         )
@@ -145,8 +146,9 @@ def process_mention_data(
             "context": context_tokens,
             "label": label_tokens,
             "label_idx": [label_idx],
+            "mention_id": mention_id
         }
-
+        # print(mention_id == str(hex(record["mention_id"][0]).upper()[2:]).rjust(16, "0"))
         if "world" in sample:
             src = sample["world"]
             src = world_to_id[src]
@@ -184,13 +186,15 @@ def process_mention_data(
     label_idx = torch.tensor(
         select_field(processed_samples, "label_idx"), dtype=torch.long,
     )
+    mention_id = select_field(processed_samples, "mention_id")
     data = {
         "context_vecs": context_vecs,
         "cand_vecs": cand_vecs,
         "label_idx": label_idx,
+        "mention_id": mention_id
     }
 
-    if use_world:
+    if use_world:   
         data["src"] = src_vecs
         tensor_data = TensorDataset(context_vecs, cand_vecs, src_vecs, label_idx)
     else:
