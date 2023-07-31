@@ -147,8 +147,8 @@ class MlpModel(nn.Module):
                     weights[torch.arange(weights.size(0)),0] = 1
                     criterion = torch.nn.BCEWithLogitsLoss(weight = weights)
                 else:
-                    weights = (0.1)*torch.ones((num_samples + 1), device = torch.device('cuda'))
-                    weights[0] = 1
+                    # weights = (0.1)*torch.ones((num_samples + 1), device = torch.device('cuda'))
+                    # weights[0] = 1
                     criterion = torch.nn.CrossEntropyLoss(weight = weights)
                 loss = criterion(scores, target)
 

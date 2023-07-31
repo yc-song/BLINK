@@ -14,7 +14,7 @@
 "top_k": 64,
 "add_linear": true,
 "output_path": "models/zeshel/crossencoder/",
-"patience": 20,
+"patience": 100,
 "layers": 1,
 "step_size":100,
 "eval_interval": 200,
