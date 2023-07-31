@@ -2,8 +2,8 @@ import sys
 import logging
 
 from torch.optim import SGD
-from pytorch_transformers.optimization import AdamW
-from pytorch_transformers.optimization import WarmupLinearSchedule
+from transformers.optimization import AdamW
+from transformers.optimization import get_linear_schedule_with_warmup
 
 logging.basicConfig(
 	stream=sys.stderr,
@@ -82,9 +82,9 @@ def get_scheduler(optimizer, epochs, warmup_proportion, len_data, batch_size, gr
 	num_train_steps = int(len_data / int(batch_size / grad_acc_steps)) * epochs
 	num_warmup_steps = int(num_train_steps * warmup_proportion)
 
-	scheduler = WarmupLinearSchedule(
-		optimizer, warmup_steps=num_warmup_steps, t_total=num_train_steps,
-	)
+	scheduler = get_linear_schedule_with_warmup(
+        optimizer, num_warmup_steps, num_train_steps
+    )
 	LOGGER.info(f" Num optimization steps = {num_train_steps}")
 	LOGGER.info(f" Num warmup steps = {num_warmup_steps}")
 	return scheduler

@@ -103,6 +103,7 @@ def convert_data(params, entity_dict, entity_map, mode):
             src = item["corpus"]
             label_doc_id = item["label_document_id"]
             orig_doc_id = item["context_document_id"]
+            mention_id = item["mention_id"]
             start = item["start_index"]
             end = item["end_index"]
 
@@ -123,6 +124,8 @@ def convert_data(params, entity_dict, entity_map, mode):
             ent_text = entity_dict[src][k]["text"]
 
             example = {}
+            example['label_doc_id'] = label_doc_id
+            example['mention_id'] = mention_id
             example["context_left"] = ' '.join(mention_context_left)
             example['context_right'] = ' '.join(mention_context_right)
             example["mention"] = mention

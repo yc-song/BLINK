@@ -12,7 +12,7 @@ from IPython import embed
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from torch.utils.data import DataLoader, TensorDataset, ConcatDataset
-from pytorch_transformers.tokenization_bert import BertTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
 
 from models.params import ENT_START_TAG, ENT_END_TAG, ENT_TITLE_TAG
 from eval.eval_utils import compute_label_embeddings, compute_input_embeddings

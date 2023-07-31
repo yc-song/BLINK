@@ -6,7 +6,7 @@ from tqdm import tqdm
 import logging
 import numpy as np
 from pathlib import Path
-from pytorch_transformers.tokenization_bert import BertTokenizer
+from transformers.models.bert.tokenization_bert import BertTokenizer
 
 from utils.data_process import load_entities, get_candidate_representation
 logging.basicConfig(
