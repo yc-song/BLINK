@@ -16,5 +16,5 @@
 # PYTHONPATH=.
 # wandb enabled
 # wandb login
-wandb agent jongsong/BLINK-blink_crossencoder/2euln0dt
+wandb agent jongsong/BLINK-blink_crossencoder/i7yh28nn
 

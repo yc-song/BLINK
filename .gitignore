@@ -10,6 +10,11 @@ libs
 */libs/*
 
 *.swp
+*.sh
+*.json
+*.ckpt
+*.csv
+*.yaml
 
 # trained models
 models
