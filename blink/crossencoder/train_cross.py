@@ -733,7 +733,7 @@ def main(params):
                 world = batch[2]
                 idxs = batch[3]
                 context_input = modify(context_input, candidate_input_train, params, world, idxs, mode = "train", wo64 = params["without_64"])
-            if params["hard_negative"]:
+            if params["hard_negative"]: 
                 bi_encoder_score = batch[4]
                 loss, _ = reranker(context_input, label_input, context_length, bi_encoder_score = bi_encoder_score)
             else:
