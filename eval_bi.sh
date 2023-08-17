@@ -1,12 +1,14 @@
 #!/bin/bash
-
-#SBATCH --job-name=eval_bi
+#SBATCH --job-name=mlp_with_som
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:4
-#SBATCH --time=0-12:00:00
-#SBATCH --mem=320000MB
+#SBATCH --gres=gpu:1
+#SBATCH --ntasks-per-node=1
+#SBATCH -o ./slurm_output/%x_%j.out
+#SBATCH -e ./slurm_output/%x_%j.err
+#SBATCH --mem=160000MB
 #SBATCH --cpus-per-task=16
-#SBATCH --partition=P1
+#SBATCH --partition=amd_a100nv_8
+#SBATCH --comment pytorch 
 # python blink/biencoder/eval_biencoder.py --path_to_model models/zeshel/biencoder/biencoder_wiki_large.bin \
 # --data_path data/zeshel/blink_format --output_path models/zeshel_128 --encode_batch_size 128 --eval_batch_size 1 \
 # --top_k 128 --save_topk_result --bert_model bert-large-uncased --mode valid --zeshel True --data_parallel \
@@ -23,7 +25,7 @@
 # python blink/biencoder/eval_biencoder.py --data_path data/zeshel/blink_format --output_path models/zeshel_anncur --encode_batch_size 256 --eval_batch_size 64 --top_k 64 --bert_model bert-base-cased --mode train,valid,test --zeshel True --data_parallel True --architecture mlp --lowercase --anncur --path_to_model=/home/jongsong/BLINK/dual_encoder_zeshel.ckpt --save_topk_result
 # python blink/biencoder/eval_biencoder.py --data_path data/zeshel/blink_format --output_path models/zeshel_anncur --encode_batch_size 256 --eval_batch_size 64 --top_k 64 --bert_model bert-base-cased --mode train,valid,test --zeshel True --data_parallel True --architecture mlp_with_bert --lowercase --anncur --path_to_model=/home/jongsong/BLINK/dual_encoder_zeshel.ckpt --save_topk_result
 # python blink/biencoder/eval_biencoder.py --data_path data/zeshel/blink_format --output_path models/zeshel --encode_batch_size 1024 --eval_batch_size 256 --top_k -1 --bert_model bert-base-cased --mode train --zeshel True --data_parallel True --architecture mlp_with_bert --lowercase --anncur --path_to_model=/home/jongsong/BLINK/dual_encoder_zeshel.ckpt --save_topk_result --cand_pool_path data/zeshel/cand_pool --cand_encode_path data/zeshel/cand_enc --split 1
-python blink/biencoder/eval_biencoder.py --data_path data/zeshel/blink_format --output_path models/zeshel --encode_batch_size 256 --eval_batch_size 256 --top_k 1024 --bert_model bert-base-uncased --mode valid,test,train --zeshel True --data_parallel True --architecture mlp --path_to_model=./dual_encoder_zeshel.ckpt --split 1 --save_topk_result --anncur --cand_pool_path data/zeshel/cand_pool_bert --cand_encode_path data/zeshel/cand_enc_bert                
+python blink/biencoder/eval_biencoder.py --data_path data/zeshel/blink_format --output_path models/zeshel --encode_batch_size 256 --eval_batch_size 256 --top_k 1024 --bert_model bert-base-uncased --mode valid,test --zeshel True --data_parallel True --architecture mlp --path_to_model=./dual_encoder_zeshel.ckpt --split 1 --save_topk_result --anncur --cand_pool_path data/zeshel/cand_pool_bert --cand_encode_path data/zeshel/cand_enc_bert                
 # python blink/biencoder/eval_biencoder.py --path_to_model models/zeshel/biencoder/pytorch_model.bin --data_path data/zeshel/blink_format --output_path models/zeshel_test --encode_batch_size 512 --eval_batch_size 32 --top_k 200 --bert_model bert-base-cased --mode train,valid,test --zeshel True --data_parallel True --architecture mlp --cand_pool_path data/zeshel/cand_pool --cand_encode_path data/zeshel/cand_enc --save_topk_result 
 # python blink/biencoder/eval_biencoder.py --path_to_model models/zeshel/biencoder/pytorch_model.bin --data_path data/zeshel/blink_format --output_path models/zeshel_test --encode_batch_size 256 --eval_batch_size 128 --top_k 64 --bert_model bert-base-cased --mode valid,train,test --zeshel True --data_parallel True --architecture mlp --cand_encode_path data/zeshel/cand_enc --cand_pool_path data/zeshel/cand_pool --save_topk_result 
 # python blink/biencoder/eval_biencoder.py --path_to_model models/zeshel/biencoder/pytorch_model.bin --data_path data/zeshel/blink_format --output_path models/zeshel_test --encode_batch_size 256 --eval_batch_size 128 --top_k 64 --bert_model bert-base-cased --mode valid,train,test --zeshel True --data_parallel True --architecture mlp_with_bert --cand_encode_path data/zeshel/cand_enc --cand_pool_path data/zeshel/cand_pool --save_topk_result 

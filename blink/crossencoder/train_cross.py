@@ -84,11 +84,59 @@ bert_based_architecture = [
 def sorted_ls(path):
     mtime = lambda f: os.stat(os.path.join(path, f)).st_mtime
     return list(sorted(os.listdir(path), key=mtime))
-
-def modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = True):
+def distribution_sample(probs, num_cands, device):
+    num_nonzero = (probs != 0).sum(1)
+    less_indices = (num_nonzero < num_cands)
+    min_num_nonzero = num_nonzero.min().item()
+    if min_num_nonzero < num_cands:
+        candidates = torch.zeros((probs.size(0), num_cands)).long().to(device)
+        candidates[less_indices] = torch.multinomial(probs[less_indices],
+                                                     num_cands,
+                                                     replacement=True)
+        if candidates[less_indices].size(0) != probs.size(0):
+            candidates[~less_indices] = torch.multinomial(probs[~less_indices],
+                                                          num_cands,
+                                                          replacement=False)
+    else:
+        candidates = torch.multinomial(probs, num_cands, replacement=False)
+    return candidates
+def modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = True, label_input = None, scores = None, top_k = 64, self_evaluate_again = False, sampling = False):
     device = torch.device('cuda')
     # get values of candidates first
     # candidate_input = candidate_input.to(device)
+    assert mode == "train" or mode == "valid" or mode == "test"
+    # print(mode, idxs, idxs.shape)
+    if mode == "train":
+        if params["hard_negative"] or params["self_evaluate"]:
+            labels = idxs[torch.arange(idxs.size(0)),label_input] # (128)
+            scores /= 100
+            probs = torch.nn.functional.softmax(scores, dim = 1)
+            ### Original Code ####
+            d_sampled=distribution_sample(probs, top_k, device)
+            hard_cands = idxs.gather(1, d_sampled) # (128, 64) 
+            result = [None]*labels.shape[0]
+            for i in range(labels.shape[0]):
+                result[i] = [labels[i].item()] + [cand.item() for cand in hard_cands[i] if cand != labels[i]]
+                result[i] = result[i][:top_k]
+            idxs = torch.tensor(result)
+        else: 
+            mask_eval_cands = label_input < params["train_cands"]
+            context_input= context_input[mask_eval_cands]
+            world = world[mask_eval_cands]
+            idxs = idxs[mask_eval_cands, :params["train_cands"]] 
+            label_input = label_input[mask_eval_cands] 
+            #######################
+            #### For unit testing ####
+            # print(label_input)
+            # hard_cands = idxs.cpu().gather(1, torch.arange(64).unsqueeze(0).expand(labels.size(0), -1)) # (128, 64) 
+            # result = [None]*labels.shape[0]
+            # for i in range(labels.shape[0]):
+            #     if label_input[i] < params["top_k"]:
+                    
+                
+        #     result[i] = [labels[i].item()] + [cand.item() for cand in hard_cands[i] if cand != labels[i]]
+        #     result[i] = result[i][:top_k]             
+        # print("after", mode, idxs, idxs.shape)
     candidate_input = candidate_input[idxs.cpu()].to(device)
     top_k=params["top_k"]
     ## context_input shape: (Size ,1024) e.g.  (10000, 1024)
@@ -129,12 +177,14 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
                 new_input=torch.stack((context_input,candidate_input),dim=2) # shape: (Size, 65, 2, 1024) e.g. (10000, 65, 2 , 1024)
             elif params["architecture"] == "raw_context_text" or params["architecture"]=="baseline":
                 new_input=torch.cat((context_input,candidate_input),dim=2)
-        return new_input
+        return new_input, label_input
         
 
 
-def evaluate(reranker, eval_dataloader, device, logger, context_length, candidate_input, zeshel=False, silent=True, train=True, input = None, wo64 = True):
+def evaluate(reranker, eval_dataloader, device, logger, context_length, candidate_input, zeshel=False, silent=True, mode = "valid", input = None, wo64 = True, hard_entire = False, recall_k = 4, sampling = False):
     reranker.eval()
+    if mode == "train": dataset_size = 49275
+    else: dataset_size = 10000
     if silent:
         iter_ = eval_dataloader
     else:
@@ -143,7 +193,12 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
     results = {}
 
     eval_accuracy = 0.0
+    cross_recall = {}
+    eval_recall = 0.
 
+    k_list = [4, 64, 128, 256, 512, 1024]
+    for k in k_list:
+        cross_recall[k] = 0
 
     eval_mrr = 0.0
     if wo64 == False:
@@ -156,7 +211,6 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
 
     nb_eval_examples = 0
     nb_eval_steps = 0
-    eval_recall=0
     
     acc = {}
     tot = {}
@@ -165,7 +219,7 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
         acc[i] = 0.0
         tot[i] = 0.0
 
-    all_logits = []
+    # all_logits = []
     cnt = 0
     for step, batch in enumerate(iter_):
         if zeshel:
@@ -177,20 +231,30 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
         if params["top_k"]>100 or params["architecture"] in oom_architecture:
             world = batch[2]
             idxs = batch[3]
-            context_input = modify(context_input, candidate_input, params, world, idxs, mode = "train", wo64 = params["without_64"])
+            if mode == "valid" and not hard_entire:
+                mask_eval_cands = label_input < params["eval_cands"]
+                context_input= context_input[mask_eval_cands]
+                world = world[mask_eval_cands]
+                idxs = idxs[mask_eval_cands, :params["eval_cands"]] 
+                label_input = label_input[mask_eval_cands] 
+            context_input, label_input = modify(context_input, candidate_input, params, world, idxs, mode = "valid", wo64 = params["without_64"], label_input = label_input)
 
         with torch.no_grad():
-            if params["dot_product"]:
+            if hard_entire:
+                logits = reranker(context_input, label_input, context_length, evaluate = True, hard_entire = True, sampling = sampling)
+            elif params["dot_product"]:
                 eval_loss, logits, _, _ = reranker(context_input, label_input, context_length, evaluate = True)
             else:
-                eval_loss, logits = reranker(context_input, label_input, context_length, evaluate = True)
+                eval_loss, logits = reranker(context_input, label_input, context_length, evaluate = True, sampling = sampling)
         logits = logits.detach().cpu().numpy()
         label_ids = label_input.cpu().numpy()
         tmp_eval_accuracy, eval_result = utils.accuracy(logits, label_ids)
-        
-        eval_recall += utils.recall(logits, label_ids)
+        if hard_entire:
+            for k in k_list:
+                cross_recall[k] += utils.recall(logits, label_ids, k = k)
+        eval_recall += utils.recall(logits, label_ids, k = recall_k)
         # print("recall", eval_recall)
-        eval_mrr+=utils.mrr(logits, label_ids, train=train, input = context_input)
+        eval_mrr+=utils.mrr(logits, label_ids, input = context_input)
         eval_accuracy += tmp_eval_accuracy
         if wo64 == False:
             tmp_eval_accuracy_64, tmp_labels_64 = utils.accuracy_label64(logits, label_ids)
@@ -202,7 +266,140 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
             total_labels_not64 += tmp_labels_not64
 
         # print("accuracy", eval_accuracy)
-        all_logits.extend(logits)
+        if step == 0: all_logits = torch.tensor(logits)
+        else: all_logits = torch.cat((all_logits, torch.tensor(logits)), dim = 0)
+        # all_logits.append(logits.tolist())
+
+        nb_eval_examples += context_input.size(0)
+        if zeshel:
+            for i in range(context_input.size(0)):
+                src_w = src[i].item()
+                acc[src_w] += eval_result[i]
+                tot[src_w] += 1
+        nb_eval_steps += 1
+    normalized_eval_accuracy = -1
+    unnormalized_eval_accuracy = -1
+    if nb_eval_examples > 0:
+        unnormalized_eval_accuracy = eval_accuracy / dataset_size
+        normalized_eval_accuracy = eval_accuracy / nb_eval_examples
+        if wo64 == False:
+            normalized_eval_accuracy_64 = eval_accuracy_64 / total_labels_64
+            normalized_eval_accuracy_not64 = eval_accuracy_not64 / total_labels_not64
+            eval_mrr_64 = eval_mrr_64 / total_labels_64
+        eval_recall/=nb_eval_examples
+        eval_mrr /= nb_eval_examples
+        if hard_entire:
+            for k in k_list:
+                cross_recall[k] = cross_recall[k]/dataset_size
+                logger.info("recall @{}: {}".format(k, cross_recall[k]))
+    results["cross_recall"] = cross_recall
+
+    if zeshel:
+        macro = 0.0
+        num = 0.0 
+
+        for i in range(len(WORLDS)):
+            if acc[i] > 0:
+                acc[i] /= tot[i]
+                macro += acc[i]
+                num += 1
+        if num > 0:
+            logger.info("Macro accuracy: %.5f" % (macro / num))
+            logger.info("Micro  normalized accuracy: %.5f" % normalized_eval_accuracy)
+            logger.info("Micro unnormalized accuracy: %.5f" % unnormalized_eval_accuracy)
+
+    
+    else:
+        if logger:
+            logger.info("Eval accuracy: %.5f" % normalized_eval_accuracy)
+    logger.info("MRR: %.5f" % eval_mrr)
+    if params["without_64"] == False:
+        logger.info("MRR @ label 64: %.5f" % eval_mrr_64)
+        logger.info("Micro accuracy @ label 64: %.5f" % normalized_eval_accuracy_64)
+
+    logger.info("Recall@{}: %.5f".format(recall_k) % eval_recall)
+    if num != 0:
+        results["macro_accuracy"] = macro/num
+    else:
+        results["macro_accuracy"] = 0
+    results["normalized_accuracy"] = normalized_eval_accuracy
+    results["unnormalized_accuracy"] = unnormalized_eval_accuracy
+    
+    results["logits"] = all_logits
+    results["mrr"]=eval_mrr
+    if params["without_64"] == False:
+        results["mrr_64"]=eval_mrr_64
+        results["normalized_accuracy_64"]=normalized_eval_accuracy_64
+        results["normalized_accuracy_not64"]=normalized_eval_accuracy_not64
+    results["recall"]=eval_recall
+    return results
+
+def recall_evaluate(reranker, eval_dataloader, device, logger, context_length, candidate_input, zeshel=False, silent=True, mode = "valid", input = None, wo64 = True, hard_entire = False, recall_k = 4):
+    reranker.eval()
+    if silent:
+        iter_ = eval_dataloader
+    else:
+        iter_ = tqdm(eval_dataloader, desc="Evaluation")
+
+    results = {}
+
+    eval_accuracy = 0.0
+    eval_recall = 0.0
+    eval_mrr = 0.0
+
+    nb_eval_examples = 0
+    nb_eval_steps = 0
+    
+    acc = {}
+    tot = {}
+    world_size = len(WORLDS)
+    for i in range(world_size):
+        acc[i] = 0.0
+        tot[i] = 0.0
+
+    # all_logits = []
+    cnt = 0
+    for step, batch in enumerate(iter_):
+        if zeshel:
+            src = batch[2]
+            cnt += 1
+        batch = tuple(t.to(device) for t in batch)
+        context_input = batch[0]
+        label_input = batch[1]
+        if params["top_k"]>100 or params["architecture"] in oom_architecture:
+            world = batch[2]
+            idxs = batch[3] 
+            context_input, label_input = modify(context_input, candidate_input, params, world, idxs, mode = "valid", wo64 = params["without_64"], label_input = label_input)
+
+        with torch.no_grad():
+            if params["self_evaluate"] and hard_entire:
+                logits = reranker(context_input, label_input, context_length, evaluate = True, hard_entire = True)
+            elif params["dot_product"]:
+                eval_loss, logits, _, _ = reranker(context_input, label_input, context_length, evaluate = True)
+            else:
+                eval_loss, logits = reranker(context_input, label_input, context_length, evaluate = True)
+        logits = logits.detach().cpu().numpy()
+        label_ids = label_input.cpu().numpy()
+        tmp_eval_accuracy, eval_result = utils.accuracy(logits, label_ids)
+        
+        eval_recall += utils.recall(logits, label_ids, 64)
+        # print("recall", eval_recall)
+        eval_mrr+=utils.mrr(logits, label_ids, input = context_input)
+        eval_accuracy += tmp_eval_accuracy
+        if wo64 == False:
+            tmp_eval_accuracy_64, tmp_labels_64 = utils.accuracy_label64(logits, label_ids)
+            tmp_eval_accuracy_not64, tmp_labels_not64 = utils.accuracy_label64(logits, label_ids, label_64=False)
+            eval_mrr_64+=utils.mrr_label64(logits, label_ids)
+            eval_accuracy_64 += tmp_eval_accuracy_64
+            eval_accuracy_not64 += tmp_eval_accuracy_not64
+            total_labels_64 += tmp_labels_64
+            total_labels_not64 += tmp_labels_not64
+
+        # print("accuracy", eval_accuracy)
+        if step == 0: all_logits = torch.tensor(logits)
+        else: all_logits = torch.cat((all_logits, torch.tensor(logits)), dim = 0)
+        # all_logits.append(logits.tolist())
+        
 
         nb_eval_examples += context_input.size(0)
         if zeshel:
@@ -247,6 +444,7 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
     else:
         results["macro_accuracy"] = 0
     results["normalized_accuracy"] = normalized_eval_accuracy
+    
     results["logits"] = all_logits
     results["mrr"]=eval_mrr
     if params["without_64"] == False:
@@ -360,6 +558,11 @@ def main(params):
                     fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp"))
                 else:
                     fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp", i))
+            elif params["architecture"] == "extend_multi":
+                if train_split == 1:
+                    fname = os.path.join(params["data_path"], "train_{}.t7".format("mlp"))
+                else:
+                    fname = os.path.join(params["data_path"], "train_{}_{}.t7".format("mlp", i))
             elif params["architecture"] == "extend_single":
                 if train_split == 1:
                     fname = os.path.join(params["data_path"], "train_{}.t7".format("extend_multi"))
@@ -370,22 +573,29 @@ def main(params):
         if i == 0:
             train_data = torch.load(fname,  map_location=torch.device('cpu'))
             # train_data = torch.load(fname)
-            context_input = train_data["context_vecs"][:params["train_size"]]
+            context_input_train = train_data["context_vecs"][:params["train_size"]]
             candidate_input_train = train_data["candidate_vecs"]
-            idxs = train_data["indexes"][:params["train_size"]]
-            label_input = train_data["labels"][:params["train_size"]]
-            bi_encoder_score = train_data["nn_scores"][:params["train_size"]]
+            idxs_train = train_data["indexes"][:params["train_size"]]
+            label_input_train = train_data["labels"][:params["train_size"]]
+            bi_encoder_score_train = train_data["nn_scores"][:params["train_size"]]
             if params["zeshel"]:
-                src_input = train_data['worlds'][:params["train_size"]]
+                src_input_train = train_data['worlds'][:params["train_size"]]
         else:
             # fname2 = os.path.join(params["data_path"], "train2.t7")
             train_data = torch.load(fname)
-            context_input = torch.cat((context_input, train_data["context_vecs"][:params["train_size"]]), dim = 0)
-            idxs = torch.cat((idxs, train_data["indexes"][:params["train_size"]]), dim = 0)
-            label_input = torch.cat((label_input, train_data["labels"][:params["train_size"]]), dim = 0)
-            bi_encoder_score = torch.cat((bi_encoder_score, train_data["nn_scores"][:params["train_size"]]), dim = 0)
+            context_input_train = torch.cat((context_input_train, train_data["context_vecs"][:params["train_size"]]), dim = 0)
+            idxs_train = torch.cat((idxs_train, train_data["indexes"][:params["train_size"]]), dim = 0)
+            label_input_train = torch.cat((label_input_train, train_data["labels"][:params["train_size"]]), dim = 0)
+            bi_encoder_score_train = torch.cat((bi_encoder_score_train, train_data["nn_scores"][:params["train_size"]]), dim = 0)
             if params["zeshel"]:
-                src_input = torch.cat((src_input, train_data['worlds'][:params["train_size"]]), dim = 0)
+                src_input_train = torch.cat((src_input_train, train_data['worlds'][:params["train_size"]]), dim = 0)
+    if not params["hard_negative"] and not params["self_evaluate"]:
+        mask_eval_cands = label_input_train < params["train_cands"]
+        context_input_train= context_input_train[mask_eval_cands]
+        src_input_train = src_input_train[mask_eval_cands]
+        idxs_train = idxs_train[mask_eval_cands, :params["train_cands"]] 
+        label_input_train = label_input_train[mask_eval_cands] 
+        bi_encoder_score_train =  bi_encoder_score_train[mask_eval_cands]
     # Init model
     if params["architecture"]=="mlp":
         reranker= MlpModel(params)
@@ -495,14 +705,14 @@ def main(params):
 
 
     # print(label_input)
-    bi_train_mrr=torch.mean(1/(label_input+1)).item()
-    bi_train_accuracy = torch.mean((label_input == 0).float()).item()
-    bi_train_recall_4 = torch.mean((label_input <= 3).float()).item()
+    bi_train_mrr=torch.mean(1/(label_input_train+1)).item()
+    bi_train_accuracy = torch.mean((label_input_train == 0).float()).item()
+    bi_train_recall_4 = torch.mean((label_input_train <= 4).float()).item()
 
 
     logger.info("train bi-encoder mrr: {}".format(bi_train_mrr))
     wandb.log({
-    "mrr/train_bi-encoder_mrr":bi_train_mrr,
+    "mrr/train_bi-encoder_mrr":bi_train_mrr, 
     "acc/train_bi-encoder_accuracy": bi_train_accuracy,
     "recall/train_bi-encoder_recall@4": bi_train_recall_4,
 
@@ -511,16 +721,20 @@ def main(params):
 
     if params["debug"]:
         max_n = 200
-        context_input = context_input[:max_n]
-        candidate_input = candidate_input[:max_n]
-        label_input = label_input[:max_n]
+        context_input_train = context_input_train[:max_n]
+        candidate_input_train = candidate_input_train[:max_n]
+        src_input_train = src_input_train[:max_n]
+        label_input_train = label_input_train[:max_n]
+        bi_encoder_score_train = bi_encoder_score_train[:max_n]
+        idxs_train = idxs_train[:max_n]
+
     if params["top_k"]<100 and not params["architecture"] in oom_architecture:
-        context_input = modify(context_input, candidate_input_train, params, src_input, idxs, mode = "train", wo64 = params["without_64"])
+        context_input_train, _ = modify(context_input_train, candidate_input_train, params, src_input_train, idxs_train, mode = "train", wo64 = params["without_64"])
     if params["zeshel"]:
-        train_tensor_data = TensorDataset(context_input, label_input, src_input, idxs, bi_encoder_score,)
+        train_tensor_data = TensorDataset(context_input_train, label_input_train, src_input_train, idxs_train, bi_encoder_score_train,)
         
     else:
-        train_tensor_data = TensorDataset(context_input, label_input, src_input, idxs, bi_encoder_score)
+        train_tensor_data = TensorDataset(context_input_train, label_input_train, src_input_train, idxs_train, bi_encoder_score_train)
 
 
     train_sampler = RandomSampler(train_tensor_data)
@@ -588,25 +802,27 @@ def main(params):
 
         if i == 0:
             valid_data = torch.load(fname)
-            context_input = valid_data["context_vecs"][:params["valid_size"]]
+            context_input_valid = valid_data["context_vecs"][:params["valid_size"]]
             candidate_input_valid = valid_data["candidate_vecs"]
-            idxs = valid_data["indexes"][:params["valid_size"]]
-            label_input = valid_data["labels"][:params["valid_size"]]
-            bi_encoder_score = valid_data["nn_scores"][:params["valid_size"]]
+            idxs_valid = valid_data["indexes"][:params["valid_size"]]
+            label_input_valid = valid_data["labels"][:params["valid_size"]]
+            bi_encoder_score_valid = valid_data["nn_scores"][:params["valid_size"]]
             if params["zeshel"]:
-                src_input = valid_data['worlds'][:params["valid_size"]]
+                src_input_valid = valid_data['worlds'][:params["valid_size"]]
         else:
             # fname2 = os.path.join(params["data_path"], "train2.t7")
             valid_data = torch.load(fname)
-            context_input = torch.cat((context_input, valid_data["context_vecs"][:params["valid_size"]]), dim = 0)
-            idxs = torch.cat((idxs, valid_data["indexes"][:params["valid_size"]]), dim = 0)
-            label_input = torch.cat((label_input, valid_data["labels"][:params["valid_size"]]), dim = 0)
-            bi_encoder_score = torch.cat((bi_encoder_score, valid_data["nn_scores"][:params["valid_size"]]), dim = 0)
+            context_input_valid = torch.cat((context_input_valid, valid_data["context_vecs"][:params["valid_size"]]), dim = 0)
+            idxs_valid = torch.cat((idxs_valid, valid_data["indexes"][:params["valid_size"]]), dim = 0)
+            label_input_valid = torch.cat((label_input_valid, valid_data["labels"][:params["valid_size"]]), dim = 0)
+            bi_encoder_score_valid = torch.cat((bi_encoder_score_valid, valid_data["nn_scores"][:params["valid_size"]]), dim = 0)
             if params["zeshel"]:
-                src_input = valid_data['worlds'][:params["valid_size"]]
-    bi_val_mrr=torch.mean(1/(label_input+1)).item()
-    bi_val_accuracy = torch.mean((label_input == 0).float()).item()
-    bi_val_recall_4 = torch.mean((label_input <= 3).float()).item()
+                src_input_valid = valid_data['worlds'][:params["valid_size"]]
+
+
+    bi_val_mrr=torch.mean(1/(label_input_valid+1)).item()
+    bi_val_accuracy = torch.mean((label_input_valid == 0).float()).item()
+    bi_val_recall_4 = torch.mean((label_input_valid <= 3).float()).item()
     wandb.log({
     "mrr/val_bi-encoder_mrr":bi_val_mrr,
     "acc/val_bi-encoder_accuracy": bi_val_accuracy,
@@ -616,15 +832,18 @@ def main(params):
 
     if params["debug"]:
         max_n = 200
-        context_input = context_input[:max_n]
-        candidate_input = candidate_input[:max_n]
-        label_input = label_input[:max_n]
+        context_input_valid = context_input_valid[:max_n]
+        candidate_input_valid = candidate_input_valid[:max_n]
+        label_input_valid = label_input_valid[:max_n]
+        bi_encoder_score_valid = bi_encoder_score_valid[:max_n]
+        idxs_valid = idxs_valid[:max_n]
+        src_input_valid = src_input_valid[:max_n]
     # print("valid context", context_input.shape)
     # print("valid candidate", candidate_input.shape)
     if params["top_k"]<100 and not params["architecture"] in oom_architecture:
-        context_input = modify(context_input, candidate_input_valid, params, src_input, idxs, mode = "valid", wo64=params["without_64"])
+        context_input_valid, _ = modify(context_input_valid, candidate_input_valid, params, src_input_valid, idxs_valid, mode = "valid", wo64=params["without_64"])
     # print("valid modify", context_input.shape)
-    valid_tensor_data = TensorDataset(context_input, label_input, src_input, idxs)
+    valid_tensor_data = TensorDataset(context_input_valid, label_input_valid, src_input_valid, idxs_valid)
     valid_sampler = SequentialSampler(valid_tensor_data)
 
     valid_dataloader = DataLoader(
@@ -645,13 +864,44 @@ def main(params):
             context_length=context_length,
             zeshel=params["zeshel"],
             silent=params["silent"],
-            train=False,
             wo64=params["without_64"]
         )
         wandb.log({
-            "acc/val_acc": val_acc["normalized_accuracy"],
+            "acc/val_acc(normalized)": val_acc["normalized_accuracy"],
+            
+            "acc/val_acc(unnormalized)": val_acc["unnormalized_accuracy"],
             "acc/val_acc(macro)": val_acc["macro_accuracy"]
             })
+        logger.info("Evaluation on the development dataset (Entire set)")
+        val_acc_recall=evaluate(
+            reranker,
+            valid_dataloader,
+            candidate_input = candidate_input_valid,
+            device=device,
+            logger=logger,
+            context_length=context_length,
+            zeshel=params["zeshel"],
+            silent=params["silent"],
+            mode = "valid",
+            wo64=params["without_64"],
+            recall_k = 64, 
+            hard_entire = True
+        )
+        wandb.log({
+            "entire_instances/val_acc":val_acc_recall["normalized_accuracy"],
+            "entire_instances/val_acc":val_acc_recall["unnormalized_accuracy"],
+            "entire_instances/val_acc(macro)":val_acc_recall["macro_accuracy"],
+            "entire_instances/val_recall":val_acc_recall["recall"],
+            "entire_instances/val_recall@4":val_acc_recall["cross_recall"][4],
+            "entire_instances/val_recall@64":val_acc_recall["cross_recall"][64],
+            "entire_instances/val_recall@128":val_acc_recall["cross_recall"][128],
+            "entire_instances/val_recall@256":val_acc_recall["cross_recall"][256],
+            "entire_instances/val_recall@512":val_acc_recall["cross_recall"][512],
+            "entire_instances/val_recall@1024":val_acc_recall["cross_recall"][1024],
+
+        
+        })
+
 
     number_of_samples_per_dataset = {}
 
@@ -684,6 +934,7 @@ def main(params):
     best_epoch_idx = -1
     best_score = -1
     best_score_macro = -1
+    best_score_unnormalized = -1
     #Early stopping variables
     patience=params["patience"]
     last_acc=1
@@ -692,6 +943,39 @@ def main(params):
     num_train_epochs = params["num_train_epochs"]
     print("epoch_idx_global", epoch_idx_global)
     for epoch_idx in trange(epoch_idx_global, int(num_train_epochs), desc="Epoch"):
+        if params["self_evaluate"]:
+            logger.info("Getting score distribution")
+            train_logits=evaluate(
+                reranker,
+                train_dataloader,
+                candidate_input = candidate_input_train,
+                device=device,
+                logger=logger,
+                context_length=context_length,
+                zeshel=params["zeshel"],
+                silent=params["silent"],
+                wo64=params["without_64"],
+                mode = "train",
+                hard_entire = True,
+                sampling = True
+            )["logits"]
+            label_input_train_zeros = torch.zeros_like(label_input_train)
+            if params["zeshel"]:
+                
+                train_tensor_data = TensorDataset(context_input_train, label_input_train_zeros, src_input_train, idxs_train, train_logits,)
+            
+            else:
+                train_tensor_data = TensorDataset(context_input_train, label_input_train_zeros, src_input_train, idxs_train, train_logits)
+
+
+            train_sampler = RandomSampler(train_tensor_data)
+
+            train_dataloader = DataLoader(
+            train_tensor_data, 
+            sampler=train_sampler, 
+            batch_size=params["train_batch_size"]
+            )
+
         model.train()
 
 
@@ -732,10 +1016,11 @@ def main(params):
             if params["top_k"]>100 or params["architecture"] in oom_architecture:
                 world = batch[2]
                 idxs = batch[3]
-                context_input = modify(context_input, candidate_input_train, params, world, idxs, mode = "train", wo64 = params["without_64"])
-            if params["hard_negative"]: 
                 bi_encoder_score = batch[4]
-                loss, _ = reranker(context_input, label_input, context_length, bi_encoder_score = bi_encoder_score)
+                context_input, label_input = modify(context_input, candidate_input_train, params, world, idxs, mode = "train", wo64 = params["without_64"], label_input = label_input, scores = bi_encoder_score)
+                if params["hard_negative"] or params["self_evaluate"]:
+                    label_input = torch.zeros_like(label_input)
+                loss, _ = reranker(context_input, label_input, context_length)
             else:
                 if params["dot_product"]:
                     loss, _, loss1, loss2 = reranker(context_input, label_input, context_length)
@@ -863,7 +1148,7 @@ def main(params):
                 context_input = batch[0] 
                 label_input = batch[1]
                 idxs = batch[3]
-                context_input = modify(context_input, candidate_input_valid, params, world, idxs, mode = "valid", wo64 = params["without_64"])
+                context_input, _ = modify(context_input, candidate_input_valid, params, world, idxs, mode = "valid", wo64 = params["without_64"])
                 if params["dot_product"]:
                     val_loss, _, val_loss1, val_loss2 = reranker(context_input, label_input, context_length)
                     val_loss_1_sum += val_loss1.item()
@@ -895,7 +1180,7 @@ def main(params):
                 "params/epoch": epoch_idx
                 })
             val_loss_sum = 0
-        if params["architecture"] != "raw_context_text" and params["architecture"] != "mlp_with_bert":
+        if params["architecture"] != "raw_context_text" and params["architecture"] != "mlp_with_bert" and not params["hard_negative"]:
             logger.info("Evaluation on the training dataset")
             train_acc=evaluate(
                 reranker,
@@ -910,6 +1195,7 @@ def main(params):
             )
             wandb.log({
             "acc/train_acc": train_acc["normalized_accuracy"],
+            "acc/train_acc(unnormalized)": train_acc["unnormalized_accuracy"],
             "acc/train_acc(macro)": train_acc["macro_accuracy"],
             'mrr/train_mrr':train_acc["mrr"],
             "recall/train_recall":train_acc["recall"],
@@ -930,6 +1216,7 @@ def main(params):
             )
             wandb.log({
             "acc/train_acc": train_acc["normalized_accuracy"],
+            "acc/train_acc(unnormalized)": train_acc["unnormalized_accuracy"],
             "acc/train_acc(macro)": train_acc["macro_accuracy"],
             'mrr/train_mrr':train_acc["mrr"],
             "recall/train_recall":train_acc["recall"],
@@ -945,17 +1232,49 @@ def main(params):
             context_length=context_length,
             zeshel=params["zeshel"],
             silent=params["silent"],
-            train=False,
+            mode = "valid",
             wo64=params["without_64"]
         )
         wandb.log({
             "acc/val_acc": val_acc["normalized_accuracy"],
+            "acc/val_acc(unnormalized)": val_acc["unnormalized_accuracy"],
             "acc/val_acc(macro)": val_acc["macro_accuracy"],
             "params/epoch": epoch_idx
             })
         output_eval_file = os.path.join(epoch_output_folder_path, "eval_results.txt")
-        
+        logger.info("Evaluation on the development dataset (entire set)")
+        val_acc_recall=evaluate(
+                reranker,
+                valid_dataloader,
+                candidate_input = candidate_input_valid,
+                device=device,
+                logger=logger,
+                context_length=context_length,
+                zeshel=params["zeshel"],
+                silent=params["silent"],
+                mode = "valid",
+                wo64=params["without_64"],
+                recall_k = 64,
+                hard_entire = True
 
+            )
+        output_eval_file = os.path.join(epoch_output_folder_path, "eval_results.txt")
+
+        wandb.log({
+            "params/epoch":epoch_idx,
+            "entire_instances/val_acc":val_acc_recall["normalized_accuracy"],
+            "entire_instances/val_acc(unnormalized)":val_acc_recall["unnormalized_accuracy"],
+            "entire_instances/val_acc(macro)":val_acc_recall["macro_accuracy"],
+            "entire_instances/val_recall":val_acc_recall["recall"],
+            "entire_instances/val_recall@4":val_acc_recall["cross_recall"][4],
+            "entire_instances/val_recall@64":val_acc_recall["cross_recall"][64],
+            "entire_instances/val_recall@128":val_acc_recall["cross_recall"][128],
+            "entire_instances/val_recall@256":val_acc_recall["cross_recall"][256],
+            "entire_instances/val_recall@512":val_acc_recall["cross_recall"][512],
+            "entire_instances/val_recall@1024":val_acc_recall["cross_recall"][1024],
+
+        
+        })
         if (val_acc["normalized_accuracy"]<=best_score):
             trigger_times+=1
             if (trigger_times>patience):
@@ -972,13 +1291,17 @@ def main(params):
 
         ls = [best_score, val_acc["normalized_accuracy"]]
         ls_macro = [best_score_macro, val_acc["macro_accuracy"]]
+        ls_unnormalized = [best_score_unnormalized, val_acc["unnormalized_accuracy"]]
+
         li = [best_epoch_idx, epoch_idx]
 
         best_score = ls[np.argmax(ls)]
         best_score_macro = ls_macro[np.argmax(ls_macro)]
+        best_score_unnormalized = ls_unnormalized[np.argmax(ls_unnormalized)]
         best_epoch_idx = li[np.argmax(ls)]
         wandb.log({"acc/best_val_acc": best_score,
         "acc/best_val_acc(macro)": best_score_macro,
+        "acc/best_val_acc(unnormalized)": best_score_unnormalized,
         "acc/best_epoch_idx": best_epoch_idx})
 
         # if (step + 1) % grad_acc_steps == 0:
@@ -1056,17 +1379,17 @@ def main(params):
                     fname = os.path.join(params["data_path"], "test_{}_{}.t7".format("extend_multi", i))
         if i == 0:
             test_data = torch.load(fname)
-            context_input = test_data["context_vecs"][:params["test_size"]]
+            context_input_test = test_data["context_vecs"][:params["test_size"]]
             candidate_input_test = test_data["candidate_vecs"]
-            idxs = test_data["indexes"][:params["test_size"]]
-            label_input = test_data["labels"][:params["test_size"]]
+            idxs_test = test_data["indexes"][:params["test_size"]]
+            label_input_test = test_data["labels"][:params["test_size"]]
 
         else:
             test_data = torch.load(fname)
-            context_input = torch.cat((context_input, test_data["context_vecs"]), dim = 0)
-            label_input = torch.cat((label_input, test_data["labels"]), dim = 0)
-            idxs = test_data["indexes"][:params["test_size"]]
-
+            context_input_test = torch.cat((context_input_test, test_data["context_vecs"]), dim = 0)
+            label_input_test = torch.cat((label_input_test, test_data["labels"]), dim = 0)
+            idxs_test = test_data["indexes"][:params["test_size"]]
+ 
     
     if params["debug"]:
         max_n = 200
@@ -1074,14 +1397,21 @@ def main(params):
         candidate_input = candidate_input[:max_n]
         label_input = label_input[:max_n]
     if params["zeshel"]:
-        src_input = test_data['worlds'][:params["test_size"]]
+        src_input_test = test_data['worlds'][:params["test_size"]]
+    if params["eval_cands"] is not None:
+        mask_eval_cands = label_input_test < params["eval_cands"]
+        context_input_test = context_input_test[mask_eval_cands]
+        idxs_test = idxs_test[mask_eval_cands] 
+        label_input_test = label_input_test[mask_eval_cands]
+        src_input_test = src_input_test[mask_eval_cands]
     if params["top_k"]<100 and not params["architecture"] in oom_architecture:
-        context_input = modify(context_input, candidate_input_test, params, src_input, idxs, mode = "test", wo64 = params["without_64"])
+        context_input_test, _ = modify(context_input_test, candidate_input_test, params, src_input_test, idxs_test, mode = "test", wo64 = params["without_64"])
 
     if params["zeshel"]:
-        test_tensor_data = TensorDataset(context_input, label_input, src_input, idxs)
+        test_tensor_data = TensorDataset(context_input_test, label_input_test, src_input_test, idxs_test)
     else:
-        test_tensor_data = TensorDataset(context_input, label_input)
+        test_tensor_data = TensorDataset(context_input_test, label_input_test)
+
     test_sampler = RandomSampler(test_tensor_data)
 
     test_dataloader = DataLoader(
@@ -1100,7 +1430,6 @@ def main(params):
         context_length=context_length,
         zeshel=params["zeshel"],
         silent=params["silent"],
-        train=False,
         wo64=params["without_64"]
     )
     if params["resume"]==True:

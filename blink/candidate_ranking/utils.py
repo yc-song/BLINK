@@ -118,7 +118,7 @@ def mrr_label64(out, labels):
     return np.sum(1/rank)
 
 
-def mrr(out, labels, train = True, input = None): #implement mean reciprocal rank
+def mrr(out, labels, input = None): #implement mean reciprocal rank
     idx_array = rankdata(-out, axis=1, method='min')
     
     rank = np.take_along_axis(idx_array, labels[:, None], axis=1)

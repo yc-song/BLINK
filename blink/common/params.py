@@ -158,6 +158,9 @@ class BlinkParser(argparse.ArgumentParser):
             "--n_heads", default = 6, type=int, help="Whether to add mlp layers on top of Bi-encoder."
         )
         parser.add_argument(
+            "--identity_init", type=str2bool, default = False, help="Whether to add mlp layers on top of Bi-encoder."
+        )
+        parser.add_argument(
             "--num_layers", default = 2, type=int, help="Whether to add mlp layers on top of Bi-encoder."
         )
         parser.add_argument(
@@ -323,7 +326,7 @@ class BlinkParser(argparse.ArgumentParser):
         parser.add_argument(
             "--self_evaluate",
             default=False,
-            type=int,
+            type=str2bool,
             help="first dimension",
         )
         parser.add_argument(
@@ -332,7 +335,13 @@ class BlinkParser(argparse.ArgumentParser):
             type=int,
             help="random negative ratio",
         )
+        parser.add_argument(
+            "--folder_path",
+            type=str,
+            help="random negative ratio",
+        )
         
+
 
         parser.add_argument(
             "--cpu",
@@ -404,6 +413,13 @@ class BlinkParser(argparse.ArgumentParser):
             type=float,
             help="The txt file where the the evaluation results will be written.",
         )
+
+        parser.add_argument(
+            "--num_sampled",
+            default=config["scheduler_gamma"],
+            type=float,
+            help="The txt file where the the evaluation results will be written.",
+        )
         parser.add_argument(
             "--cos_similarity",
             action = "store_true",
@@ -467,6 +483,24 @@ class BlinkParser(argparse.ArgumentParser):
             default=config["num_train_epochs"],
             type=int,
             help="Number of training epochs.",
+        )
+        parser.add_argument(
+            "--eval_cands",
+            default=64,
+            type=int,
+            help="Number of evaluation negatives.",
+        )
+        parser.add_argument(
+            "--train_cands",
+            default=64,
+            type=int,
+            help="Number of training negatives.",
+        )
+        parser.add_argument(
+            "--sample_cands",
+            default=64,
+            type=int,
+            help="Number of evaluation negatives.",
         )
         parser.add_argument(
             "--train_size",

@@ -34,7 +34,7 @@
 "resume": false,
 "run_id": "vas87n1", 
 "without_64": true,
-"timeout": 720,
+"timeout": 72000000,
 "decoder": false,
 "act_fn": "softplus",
 "binary_loss": false,

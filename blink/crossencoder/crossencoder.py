@@ -608,7 +608,17 @@ class TransformersBertEncoder(nn.Module):
             attentions=all_self_attentions,
             cross_attentions=all_cross_attentions,
         )
-
+class IdentityInitializedTransformerEncoderLayer(nn.Module):
+    def __init__(self, d_model, n_head, num_layers, dim_feedforward=3072, dropout=0.1, activation="relu"):
+        super(IdentityInitializedTransformerEncoderLayer, self).__init__()
+        self.encoder_layer = nn.TransformerEncoderLayer(d_model, n_head, dim_feedforward, dropout, activation, batch_first = True)
+    def forward(self,src, src_mask=None, src_key_padding_mask=None):
+        out1 = self.encoder_layer(src, src_mask, src_key_padding_mask)
+    
+        # Combine the outputs
+        out = out1 + src
+        
+        return out
 class ExtendExtensionModule(torch.nn.Module):
     def __init__(self, params, tokenizer):
         super(ExtendExtensionModule, self).__init__()
@@ -625,6 +635,9 @@ class ExtendExtensionModule(torch.nn.Module):
         self.attentionlayer = torch.nn.MultiheadAttention(self.embed_dim, self.n_heads, batch_first = True)
         self.classification_head = torch.nn.Linear(self.embed_dim, 1)
         self.token_type_embeddings = nn.Embedding(2, self.embed_dim).to(self.device)
+        if params["identity_init"]:
+            self.transformerencoderlayer = IdentityInitializedTransformerEncoderLayer(self.embed_dim, self.n_heads, self.num_layers).to(self.device)
+            self.transformerencoder = torch.nn.TransformerEncoder(self.transformerencoderlayer, self.num_layers)
 
         # self.layer_norm = torch.nn.LayerNorm(self.embed_dim)
         # self.feedforward = nn.Sequential(
@@ -656,6 +669,21 @@ class ExtendExtensionModule(torch.nn.Module):
             scores = self.classification_head(attention_result)[:,1:,:]
 
         return scores.squeeze(-1)
+    def forward_chunk(self, xs, ys, dot = False, size_chunk = 1):
+        xs = xs.repeat_interleave(size_chunk, dim=0)
+        token_type_xs = torch.zeros(xs.size(0), xs.size(1)).int().to(self.device)
+        token_embedding_xs = self.token_type_embeddings(token_type_xs)
+        token_type_ys = torch.ones(ys.size(0), ys.size(1)).int().to(self.device)
+        token_embedding_ys = self.token_type_embeddings(token_type_ys)
+        input = torch.cat([xs + token_embedding_xs, ys + token_embedding_ys], dim = 1)
+        attention_result = self.transformerencoder(input)
+        if dot:
+            scores = torch.bmm(attention_result[:,0,:].unsqueeze(1), attention_result[:,1:,:].transpose(2,1))
+            scores = scores.squeeze(-2)
+        else:
+            scores = self.linearhead(attention_result[:,1:,:])
+            scores = scores.squeeze(-1)
+        return scores
 class ExtendExtensionRanker(torch.nn.Module):
     def __init__(self, params):
         super(ExtendExtensionRanker, self).__init__()
@@ -675,9 +703,57 @@ class ExtendExtensionRanker(torch.nn.Module):
             self.model = ExtendExtensionModule(params, self.tokenizer)
             self.model = self.model.to(self.device)
         self.criterion = torch.nn.CrossEntropyLoss()
-    def forward(self, input, label_input, context_length, evaluate = False):
-        scores = self.model(input)
-        loss = self.criterion(scores, label_input)
+    def forward(self, input, label_input, context_length, evaluate = False, hard_entire = False, beam_ratio =0.25, sampling = False):
+        if hard_entire:
+            round = 1
+            top_k = self.params["sample_cands"]
+            context = input[:,0,:].unsqueeze(1)
+            candidate = input[:,1:,:]
+            B, C, D = candidate.size()
+            candidates_embeds = {}
+            candidates_embeds["embeds"] = candidate
+            candidates_embeds["idxs"] = torch.arange(candidates_embeds["embeds"].size(1))\
+                        .expand(candidates_embeds["embeds"].size(0), -1)
+            if self.params["classification_head"] == "dot":
+                dot = True
+            else: dot = False
+            processed_tensor = candidate.reshape(-1, top_k, D)
+            scores = self.model.forward_chunk(context, processed_tensor, dot, int(candidate.size(1)/top_k)) 
+            scores = scores.view(B, -1, top_k)
+            idxs = torch.topk(scores, int(top_k*beam_ratio))[1]
+            cumulative_idxs = torch.tensor([top_k*i for i in range(idxs.size(1))], device = self.device).unsqueeze(1)
+            idxs += cumulative_idxs
+            idxs = idxs.view(B, int(C*beam_ratio))
+            batch_idxs = torch.arange(B).unsqueeze(1).expand_as(idxs)
+            scores = scores.view(B, C)
+            candidates_embeds["embeds"] = candidates_embeds["embeds"][batch_idxs, idxs, :]
+            candidates_embeds["idxs"] = candidates_embeds["idxs"][batch_idxs, idxs.cpu()]
+            while idxs.size(1) >= top_k:
+                round += 1
+                processed_tensor = candidates_embeds["embeds"].reshape(-1, top_k, candidates_embeds["embeds"].size(-1))
+                idxs_chunks = candidates_embeds["idxs"].reshape(-1, top_k)
+                new_scores = self.model.forward_chunk(context, processed_tensor, dot, int(candidates_embeds["embeds"].size(1)/top_k))
+                new_scores = new_scores.view(B, -1, top_k)
+                idxs = torch.topk(new_scores, int(top_k*beam_ratio))[1]
+                cumulative_idxs = torch.tensor([top_k*i for i in range(idxs.size(1))], device = self.device).unsqueeze(1)
+                idxs += cumulative_idxs
+                idxs = idxs.view(B, int(candidates_embeds["embeds"].size(1)*beam_ratio))
+                batch_idxs = torch.arange(B).unsqueeze(1).expand_as(idxs)
+                new_scores = new_scores.view(B, candidates_embeds["embeds"].size(1))
+                if sampling:
+                    for row in range(candidates_embeds["embeds"].size(0)):
+                        scores[row, candidates_embeds["idxs"][row]] *= (round-1)/round
+                        scores[row, candidates_embeds["idxs"][row]] += new_scores[row]/round
+                else:
+                    for row in range(candidates_embeds["embeds"].size(0)):
+                        scores[row, candidates_embeds["idxs"][row]] += new_scores[row]
+
+                candidates_embeds["embeds"] = candidates_embeds["embeds"][batch_idxs, idxs, :]
+                candidates_embeds["idxs"] = candidates_embeds["idxs"][batch_idxs, idxs.cpu()]
+            return scores
+        else:
+            scores = self.model(input)
+            loss = self.criterion(scores, label_input)
         return loss, scores
 
 
