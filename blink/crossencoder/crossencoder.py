@@ -608,14 +608,11 @@ class TransformersBertEncoder(nn.Module):
             attentions=all_self_attentions,
             cross_attentions=all_cross_attentions,
         )
-class IdentityInitializedTransformerEncoderLayer(nn.Module):
+class IdentityInitializedTransformerEncoderLayer(torch.nn.TransformerEncoderLayer):
     def __init__(self, d_model, n_head, num_layers, dim_feedforward=3072, dropout=0.1, activation="relu"):
-        super(IdentityInitializedTransformerEncoderLayer, self).__init__()
-        self.encoder_layer = nn.TransformerEncoderLayer(d_model, n_head, dim_feedforward, dropout, activation, batch_first = True)
-    def forward(self,src, src_mask=None, src_key_padding_mask=None):
-        out1 = self.encoder_layer(src, src_mask, src_key_padding_mask)
-    
-        # Combine the outputs
+        super(IdentityInitializedTransformerEncoderLayer, self).__init__(d_model, n_head)
+    def forward(self,src, src_mask=None, src_key_padding_mask=None, is_causal = False):
+        out1 = super(IdentityInitializedTransformerEncoderLayer, self).forward(src, src_mask, src_key_padding_mask, is_causal)
         out = out1 + src
         
         return out
