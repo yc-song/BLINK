@@ -700,7 +700,7 @@ class ExtendExtensionRanker(torch.nn.Module):
             self.model = ExtendExtensionModule(params, self.tokenizer)
             self.model = self.model.to(self.device)
         self.criterion = torch.nn.CrossEntropyLoss()
-    def forward(self, input, label_input, context_length, evaluate = False, hard_entire = False, beam_ratio =0.25, sampling = False):
+    def forward(self, input, label_input, context_length, evaluate = False, hard_entire = False, beam_ratio =0.5, sampling = False):
         if hard_entire:
             round = 1
             top_k = self.params["sample_cands"]
