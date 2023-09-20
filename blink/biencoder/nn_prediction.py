@@ -46,6 +46,7 @@ def get_topk_predictions(
         reranker_frozen = BiEncoderRanker(params)
         params["path_to_model"] = bert_path
     nn_context = []
+    nn_context_emb = []
     nn_candidates = []
     nn_labels = []
     nn_worlds = []
@@ -65,6 +66,7 @@ def get_topk_predictions(
         cand_encode_late_interaction_tensor = None
         cand_encode_list_tensor = None
         candidate_pool_tensor = None
+        candidate_emb_tesnor = None
         # Stacking cand_encode_list and candidate_pool to one tensor
         for i in range(1, len(cand_encode_list)):
             cumulative_idx.append(cumulative_idx[i-1]+cand_encode_list[i-1+src_minus].size(0))
@@ -76,7 +78,13 @@ def get_topk_predictions(
         cand_encode_list = [cand_encode_list]
         cand_cls_list=[cand_cls_list]
         cand_cls_list=[cand_cls_list]
-
+    if params["save_topk_nce"]:
+        cands_dir = os.path.join(
+                params['output_path'],
+                "top%d_candidates" % params['top_k'],
+            )
+        if not os.path.exists(cands_dir):
+            os.makedirs(cands_dir)
     logger.info("World size : %d" % world_size)
 
     for i in range(world_size):
@@ -133,8 +141,7 @@ def get_topk_predictions(
                     )
                     if top_k == -1:
                         value = new_scores
-                        # inds = torch.arange(new_scores.size(1)).unsqueeze(0)
-                        value, inds = new_scores.sort(descending = True)  
+                        # inds = torch.arange(new_scores.size(1)).unsqueez
 
                     else:
                         value, inds = new_scores.topk(top_k)
@@ -172,7 +179,10 @@ def get_topk_predictions(
                 candidate['candidates'] = all_entities[inds.cpu()].tolist()
                 candidate['scores'] = value.tolist()
                 candidate['labels'] = pointer
+                candidate['context_embedding'] = embedding_ctxt[i].cpu().tolist()
+                candidate['candidate_embedding'] = cand_encode_list[srcs[i].item()][inds.cpu()].cpu().tolist()
                 cands.append(candidate)
+
                 # cur_candidates = candidate_pool[srcs[i].item()][inds]
             # else:
                 # cur_candidates = cand_encode_list[srcs[i].item()][inds]#(64,1024)
@@ -183,6 +193,7 @@ def get_topk_predictions(
                    nn_context.append(reranker_frozen.encode_context(context_input[i].unsqueeze(0)).squeeze(-2).cpu().tolist())
                 elif params["architecture"] == "raw_context_text" or params["architecture"] == "mlp_with_bert":
                     nn_context.append(context_input[i].cpu().tolist())#(1024)
+                    nn_context_emb.append(embedding_ctxt[i].cpu().tolist())
                 elif params["architecture"] == "mlp_with_som" or params["architecture"] == "extend_multi":
                     nn_context.append(embedding_late_interaction_ctxt[i].cpu().tolist())#(1024)
                 
@@ -225,12 +236,6 @@ def get_topk_predictions(
 
     logger.info(res.output())
     if params["save_topk_nce"]:
-        cands_dir = os.path.join(
-                params['output_path'],
-                "top%d_candidates" % params['top_k'],
-            )
-        if not os.path.exists(cands_dir):
-            os.makedirs(cands_dir)
         with open(os.path.join(cands_dir, 'candidates_%s.json' % params["mode"]), 'w') as f:
             for item in cands:
                 f.write('%s\n' % json.dumps(item))
@@ -261,6 +266,10 @@ def get_topk_predictions(
             print("score shape", nn_data["nn_scores"].shape)
             print("index shape", nn_data["indexes"].shape)
             print("labels", nn_data["labels"].shape)
+            if params["architecture"] == "mlp_with_bert":
+                nn_context_emb = torch.FloatTensor(nn_context_emb)
+                nn_data["context_emb"] = nn_context_emb
+                print("context emb shape", nn_data["context_emb"].shape)
         if split == 0:
             if params['freeze_bert']:
                 for i in range(len(cand_encode_list)):
@@ -275,10 +284,13 @@ def get_topk_predictions(
                 for i in range(len(cand_encode_list)):
                     if i == 0:
                         candidate_pool_tensor = candidate_pool[i+src_minus]
+                        candidate_emb_tensor = cand_encode_list[i+src_minus]
                     else:
                         candidate_pool_tensor = torch.cat([candidate_pool_tensor, candidate_pool[i+src_minus]])
+                        candidate_emb_tensor =  torch.cat([candidate_emb_tensor, cand_encode_list[i+src_minus]])
 
                 nn_data["candidate_vecs"] = candidate_pool_tensor.to(device)
+                nn_data["candidate_emb"] = candidate_emb_tensor.to(device)
             elif params["architecture"] == "mlp_with_som":
                 for i in range(len(cand_encode_list)):
                     if i == 0:
@@ -296,6 +308,8 @@ def get_topk_predictions(
                 nn_data["candidate_vecs"] = cand_encode_list_tensor.to(device)        
 
             print("candidate", nn_data["candidate_vecs"].shape)
+            if params["architecture"] == "mlp_with_bert":
+                print("candidate emb", nn_data["candidate_emb"].shape)
 
         if is_zeshel:
             nn_data["worlds"] = torch.LongTensor(nn_worlds)

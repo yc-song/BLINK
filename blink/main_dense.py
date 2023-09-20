@@ -7,7 +7,7 @@
 import argparse
 import json
 import sys
-sys.path.append('/mnt/f/BLINK')
+sys.path.append('./')
 from tqdm import tqdm
 import logging
 import torch
@@ -533,14 +533,15 @@ def run(
             # print crossencoder prediction
             idx = 0
             for entity_list, index_list, sample in zip(nns, index_array, samples):
-                e_id = entity_list[index_list[-1]]
-                e_title = id2title[e_id]
-                e_text = id2text[e_id]
-                e_url = id2url[e_id]
-                _print_colorful_prediction(
-                    idx, sample, e_id, e_title, e_text, e_url, args.show_url
-                )
-                idx += 1
+                for i in args.top_k:
+                    e_id = entity_list[index_list[-i]]
+                    e_title = id2title[e_id]
+                    e_text = id2text[e_id]
+                    e_url = id2url[e_id]
+                    _print_colorful_prediction(
+                        idx, sample, e_id, e_title, e_text, e_url, args.show_url
+                    )
+                    idx += 1
             print()
         else:
 

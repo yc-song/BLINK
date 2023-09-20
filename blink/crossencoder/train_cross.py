@@ -80,6 +80,7 @@ bert_based_architecture = [
     "baseline",
     "mlp_with_som_finetuning"
 ]
+ROOT_DIR = "/shared/s3/lab07/jongsong/BLINK/crossencoder"
 
 def sorted_ls(path):
     mtime = lambda f: os.stat(os.path.join(path, f)).st_mtime
@@ -137,7 +138,7 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
         #     result[i] = [labels[i].item()] + [cand.item() for cand in hard_cands[i] if cand != labels[i]]
         #     result[i] = result[i][:top_k]             
         # print("after", mode, idxs, idxs.shape)
-    candidate_input = candidate_input[idxs.cpu()].to(device)
+    candidate_input = candidate_input[idxs.cpu().long()[:,:top_k]].to(device)
     top_k=params["top_k"]
     ## context_input shape: (Size ,1024) e.g.  (10000, 1024)
     ## candidate_input shape: (Size, 65, 1024) e.g. (10000, 65, 1024)
@@ -221,6 +222,7 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
 
     # all_logits = []
     cnt = 0
+
     for step, batch in enumerate(iter_):
         if zeshel:
             src = batch[2]
@@ -231,21 +233,24 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
         if params["top_k"]>100 or params["architecture"] in oom_architecture:
             world = batch[2]
             idxs = batch[3]
+            bi_score = batch[-1]
             if mode == "valid" and not hard_entire:
                 mask_eval_cands = label_input < params["eval_cands"]
                 context_input= context_input[mask_eval_cands]
                 world = world[mask_eval_cands]
                 idxs = idxs[mask_eval_cands, :params["eval_cands"]] 
                 label_input = label_input[mask_eval_cands] 
+                bi_score = bi_score[mask_eval_cands, :params["eval_cands"]]
+            
             context_input, label_input = modify(context_input, candidate_input, params, world, idxs, mode = "valid", wo64 = params["without_64"], label_input = label_input)
-
         with torch.no_grad():
             if hard_entire:
                 logits = reranker(context_input, label_input, context_length, evaluate = True, hard_entire = True, sampling = sampling)
-            elif params["dot_product"]:
+            elif params["dot_product"] or params["distill"]: 
                 eval_loss, logits, _, _ = reranker(context_input, label_input, context_length, evaluate = True)
             else:
                 eval_loss, logits = reranker(context_input, label_input, context_length, evaluate = True, sampling = sampling)
+        # logits = bi_score.cpu().numpy()
         logits = logits.detach().cpu().numpy()
         label_ids = label_input.cpu().numpy()
         tmp_eval_accuracy, eval_result = utils.accuracy(logits, label_ids)
@@ -650,7 +655,7 @@ def main(params):
     # if you want to resume the training, set "resume" true and specify "run_id"
     if params["resume"]==True:
         print('*****************')
-        folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"], params["run_id"])
+        folder_path="{}{}/{}/".format(params["output_path"], params["architecture"], params["run_id"])
         each_file_path_and_gen_time = []
         ## Getting newest file
         for each_file_name in os.listdir(folder_path):
@@ -672,13 +677,13 @@ def main(params):
         run = wandb.init(project=params["wandb"], config=params)
     config = wandb.config
     model_output_path = params["output_path"]+params["architecture"]+"/"+run.id
+    if not os.path.exists(model_output_path):
+        os.makedirs(model_output_path)
     if not params["resume"]:
         if not os.path.exists(model_output_path+"training_params"):
             os.makedirs(model_output_path+"/training_params")
         with open(os.path.join(model_output_path, "training_params/training_params.json"), 'w') as outfile:
             json.dump(params, outfile)
-    if not os.path.exists(model_output_path):
-        os.makedirs(model_output_path)
     if not os.path.exists(params["output_path"]+params["architecture"]+"/"+run.id+"/Epochs"): 
         os.makedirs(params["output_path"]+params["architecture"]+"/"+run.id+"/Epochs")
 
@@ -843,7 +848,7 @@ def main(params):
     if params["top_k"]<100 and not params["architecture"] in oom_architecture:
         context_input_valid, _ = modify(context_input_valid, candidate_input_valid, params, src_input_valid, idxs_valid, mode = "valid", wo64=params["without_64"])
     # print("valid modify", context_input.shape)
-    valid_tensor_data = TensorDataset(context_input_valid, label_input_valid, src_input_valid, idxs_valid)
+    valid_tensor_data = TensorDataset(context_input_valid, label_input_valid, src_input_valid, idxs_valid, bi_encoder_score_valid)
     valid_sampler = SequentialSampler(valid_tensor_data)
 
     valid_dataloader = DataLoader(
@@ -864,7 +869,8 @@ def main(params):
             context_length=context_length,
             zeshel=params["zeshel"],
             silent=params["silent"],
-            wo64=params["without_64"]
+            wo64=params["without_64"],
+            mode="valid"
         )
         wandb.log({
             "acc/val_acc(normalized)": val_acc["normalized_accuracy"],
@@ -873,34 +879,34 @@ def main(params):
             "acc/val_acc(macro)": val_acc["macro_accuracy"]
             })
         logger.info("Evaluation on the development dataset (Entire set)")
-        val_acc_recall=evaluate(
-            reranker,
-            valid_dataloader,
-            candidate_input = candidate_input_valid,
-            device=device,
-            logger=logger,
-            context_length=context_length,
-            zeshel=params["zeshel"],
-            silent=params["silent"],
-            mode = "valid",
-            wo64=params["without_64"],
-            recall_k = 64, 
-            hard_entire = True
-        )
-        wandb.log({
-            "entire_instances/val_acc":val_acc_recall["normalized_accuracy"],
-            "entire_instances/val_acc":val_acc_recall["unnormalized_accuracy"],
-            "entire_instances/val_acc(macro)":val_acc_recall["macro_accuracy"],
-            "entire_instances/val_recall":val_acc_recall["recall"],
-            "entire_instances/val_recall@4":val_acc_recall["cross_recall"][4],
-            "entire_instances/val_recall@64":val_acc_recall["cross_recall"][64],
-            "entire_instances/val_recall@128":val_acc_recall["cross_recall"][128],
-            "entire_instances/val_recall@256":val_acc_recall["cross_recall"][256],
-            "entire_instances/val_recall@512":val_acc_recall["cross_recall"][512],
-            "entire_instances/val_recall@1024":val_acc_recall["cross_recall"][1024],
+        # val_acc_recall=evaluate(
+        #     reranker,
+        #     valid_dataloader,
+        #     candidate_input = candidate_input_valid,
+        #     device=device,
+        #     logger=logger,
+        #     context_length=context_length,
+        #     zeshel=params["zeshel"],
+        #     silent=params["silent"],
+        #     mode = "valid",
+        #     wo64=params["without_64"],
+        #     recall_k = 64, 
+        #     hard_entire = True
+        # )
+        # wandb.log({
+        #     "entire_instances/val_acc":val_acc_recall["normalized_accuracy"],
+        #     "entire_instances/val_acc":val_acc_recall["unnormalized_accuracy"],
+        #     "entire_instances/val_acc(macro)":val_acc_recall["macro_accuracy"],
+        #     "entire_instances/val_recall":val_acc_recall["recall"],
+        #     "entire_instances/val_recall@4":val_acc_recall["cross_recall"][4],
+        #     "entire_instances/val_recall@64":val_acc_recall["cross_recall"][64],
+        #     "entire_instances/val_recall@128":val_acc_recall["cross_recall"][128],
+        #     "entire_instances/val_recall@256":val_acc_recall["cross_recall"][256],
+        #     "entire_instances/val_recall@512":val_acc_recall["cross_recall"][512],
+        #     "entire_instances/val_recall@1024":val_acc_recall["cross_recall"][1024],
 
         
-        })
+        # })
 
 
     number_of_samples_per_dataset = {}
@@ -1020,7 +1026,12 @@ def main(params):
                 context_input, label_input = modify(context_input, candidate_input_train, params, world, idxs, mode = "train", wo64 = params["without_64"], label_input = label_input, scores = bi_encoder_score)
                 if params["hard_negative"] or params["self_evaluate"]:
                     label_input = torch.zeros_like(label_input)
-                loss, _ = reranker(context_input, label_input, context_length)
+                if params["distill"]:
+                    loss, _, loss1, loss2 = reranker(context_input, label_input, context_length, teacher_scores = bi_encoder_score)
+                    tr_loss_1 += loss1.item()
+                    tr_loss_2 += loss2.item()
+                else:
+                    loss, _ = reranker(context_input, label_input, context_length)
             else:
                 if params["dot_product"]:
                     loss, _, loss1, loss2 = reranker(context_input, label_input, context_length)
@@ -1034,7 +1045,6 @@ def main(params):
                 loss = loss / grad_acc_steps
 
             tr_loss += loss.item()
-            
             if (step + 1) % (params["print_interval"] * grad_acc_steps) == 0:
                 print("optimizer", optimizer)
                 print("optimizer_mlp", optimizer_mlp)
@@ -1045,27 +1055,27 @@ def main(params):
                         tr_loss / (print_interval * grad_acc_steps),
                     )
                 )
-                if params["dot_product"]:
+                if params["dot_product"] or params["distill"]:
                     wandb.log({
                     "loss/train_loss":tr_loss / (params["print_interval"] * grad_acc_steps),
                     "params/epoch":epoch_idx,
                     "params/learning_rate":  optimizer.param_groups[0]['lr'],
-                    "loss/label_loss":tr_loss_1 / (params["print_interval"] * grad_acc_steps),
-                    "loss/dot_product_loss":tr_loss_2 / (params["print_interval"] * grad_acc_steps),
+                    "loss/student_loss":tr_loss_1 / (params["print_interval"] * grad_acc_steps),
+                    "loss/teacher_loss":tr_loss_2 / (params["print_interval"] * grad_acc_steps),
 
                     })
                     tr_loss_1 = 0
                     tr_loss_2 = 0
                 else:
+
                     wandb.log({
                     "loss/train_loss":tr_loss / (params["print_interval"] * grad_acc_steps),
                     "params/epoch":epoch_idx,
-                    "params/learning_rate":  optimizer.param_groups[0]['lr']
+                    "params/learning_rate":  optimizer.param_groups[0]['lr'],
                     })
                 tr_loss = 0
 
             loss.backward()
-
 
                 
             if (step + 1) % grad_acc_steps == 0:
@@ -1091,8 +1101,9 @@ def main(params):
                 'optimizer_state_dict': optimizer.state_dict(),
                 'step': step,
                 }, epoch_output_folder_path)
-                folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"],run.id)
-
+                folder_path="{}{}/{}/".format(params["output_path"], params["architecture"],run.id)
+                if not os.path.exists(folder_path):
+                    os.makedirs(folder_path)
                 # each_file_path_and_gen_time = []
                 max_Files = 5
                 del_list = sorted_ls(folder_path)[0:(len(sorted_ls(folder_path))-max_Files)]
@@ -1127,7 +1138,7 @@ def main(params):
                 'optimizer_state_dict': optimizer.state_dict(),
                 'step': step,
                 }, epoch_output_folder_path)
-                folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"],run.id)
+                folder_path="{}{}/{}/".format(params["output_path"], params["architecture"],run.id)
         else:
             epoch_output_folder_path = os.path.join(
             model_output_path, "Epochs/epoch_{}".format(epoch_idx)
@@ -1140,7 +1151,7 @@ def main(params):
             'step': step,
             }, epoch_output_folder_path)
 
-            folder_path="models/zeshel/crossencoder/{}/{}/".format(params["architecture"],run.id)
+            folder_path="{}{}/{}/".format(params["output_path"], params["architecture"],run.id)
         if params["architecture"]=="mlp":   
             model.eval()
             for step, batch in enumerate(iter_valid):
@@ -1180,7 +1191,7 @@ def main(params):
                 "params/epoch": epoch_idx
                 })
             val_loss_sum = 0
-        if params["architecture"] != "raw_context_text" and params["architecture"] != "mlp_with_bert" and not params["hard_negative"]:
+        if params["architecture"] != "raw_context_text" and params["architecture"] != "mlp_with_bert" and not params["hard_negative"] or not params["self_evaluate"]:
             logger.info("Evaluation on the training dataset")
             train_acc=evaluate(
                 reranker,
@@ -1191,7 +1202,8 @@ def main(params):
                 context_length=context_length,
                 zeshel=params["zeshel"],
                 silent=params["silent"],
-                wo64=params["without_64"]
+                wo64=params["without_64"],
+                mode = "train"
             )
             wandb.log({
             "acc/train_acc": train_acc["normalized_accuracy"],
@@ -1212,7 +1224,8 @@ def main(params):
                 context_length=context_length,
                 zeshel=params["zeshel"],
                 silent=params["silent"],
-                wo64=params["without_64"]
+                wo64=params["without_64"],
+                mode = "train"
             )
             wandb.log({
             "acc/train_acc": train_acc["normalized_accuracy"],
@@ -1242,39 +1255,39 @@ def main(params):
             "params/epoch": epoch_idx
             })
         output_eval_file = os.path.join(epoch_output_folder_path, "eval_results.txt")
-        logger.info("Evaluation on the development dataset (entire set)")
-        val_acc_recall=evaluate(
-                reranker,
-                valid_dataloader,
-                candidate_input = candidate_input_valid,
-                device=device,
-                logger=logger,
-                context_length=context_length,
-                zeshel=params["zeshel"],
-                silent=params["silent"],
-                mode = "valid",
-                wo64=params["without_64"],
-                recall_k = 64,
-                hard_entire = True
+        # logger.info("Evaluation on the development dataset (entire set)")
+        # val_acc_recall=evaluate(
+        #         reranker,
+        #         valid_dataloader,
+        #         candidate_input = candidate_input_valid,
+        #         device=device,
+        #         logger=logger,
+        #         context_length=context_length,
+        #         zeshel=params["zeshel"],
+        #         silent=params["silent"],
+        #         mode = "valid",
+        #         wo64=params["without_64"],
+        #         recall_k = 64,
+        #         hard_entire = True
 
-            )
-        output_eval_file = os.path.join(epoch_output_folder_path, "eval_results.txt")
+        #     )
+        # output_eval_file = os.path.join(epoch_output_folder_path, "eval_results.txt")
 
-        wandb.log({
-            "params/epoch":epoch_idx,
-            "entire_instances/val_acc":val_acc_recall["normalized_accuracy"],
-            "entire_instances/val_acc(unnormalized)":val_acc_recall["unnormalized_accuracy"],
-            "entire_instances/val_acc(macro)":val_acc_recall["macro_accuracy"],
-            "entire_instances/val_recall":val_acc_recall["recall"],
-            "entire_instances/val_recall@4":val_acc_recall["cross_recall"][4],
-            "entire_instances/val_recall@64":val_acc_recall["cross_recall"][64],
-            "entire_instances/val_recall@128":val_acc_recall["cross_recall"][128],
-            "entire_instances/val_recall@256":val_acc_recall["cross_recall"][256],
-            "entire_instances/val_recall@512":val_acc_recall["cross_recall"][512],
-            "entire_instances/val_recall@1024":val_acc_recall["cross_recall"][1024],
+        # wandb.log({
+        #     "params/epoch":epoch_idx,
+        #     "entire_instances/val_acc":val_acc_recall["normalized_accuracy"],
+        #     "entire_instances/val_acc(unnormalized)":val_acc_recall["unnormalized_accuracy"],
+        #     "entire_instances/val_acc(macro)":val_acc_recall["macro_accuracy"],
+        #     "entire_instances/val_recall":val_acc_recall["recall"],
+        #     "entire_instances/val_recall@4":val_acc_recall["cross_recall"][4],
+        #     "entire_instances/val_recall@64":val_acc_recall["cross_recall"][64],
+        #     "entire_instances/val_recall@128":val_acc_recall["cross_recall"][128],
+        #     "entire_instances/val_recall@256":val_acc_recall["cross_recall"][256],
+        #     "entire_instances/val_recall@512":val_acc_recall["cross_recall"][512],
+        #     "entire_instances/val_recall@1024":val_acc_recall["cross_recall"][1024],
 
         
-        })
+        # })
         if (val_acc["normalized_accuracy"]<=best_score):
             trigger_times+=1
             if (trigger_times>patience):

@@ -91,6 +91,18 @@ class BlinkParser(argparse.ArgumentParser):
             help="Whether to distributed the candidate generation process.",
         )
         parser.add_argument(
+            "--distill",
+            default = False,
+            type = str2bool,
+            help="Whether to distributed the candidate generation process.",
+        )
+        parser.add_argument(
+            "--distill_training",
+            default = False,
+            type = str2bool,
+            help="Whether to distributed the candidate generation process.",
+        )
+        parser.add_argument(
             "--no_cuda", action="store_true", 
             help="Whether not to use CUDA when available",
         )
@@ -170,7 +182,13 @@ class BlinkParser(argparse.ArgumentParser):
             "--anncur", action="store_true", help="load anncur checkpoint or not."
         )
         parser.add_argument(
+            "--mvd", action="store_true", help="load anncur checkpoint or not."
+        )
+        parser.add_argument(
             "--adapter", action="store_true", help="use adapter for training or not."
+        )
+        parser.add_argument(
+            "--cross_score_save", action="store_true", help="use adapter for training or not."
         )
         parser.add_argument(
             "--act_fn",
@@ -293,6 +311,12 @@ class BlinkParser(argparse.ArgumentParser):
             "--output_path",
             default=config["output_path"],
             type=str,
+            help="The output directory where generated output file (model, etc.) is to be dumped.",
+        )
+        parser.add_argument(
+            "--initial_weight",
+            default=-5.,
+            type=float,
             help="The output directory where generated output file (model, etc.) is to be dumped.",
         )
         parser.add_argument(

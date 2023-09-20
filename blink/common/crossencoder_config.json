@@ -13,7 +13,7 @@
 "zeshel": true,
 "top_k": 64,
 "add_linear": true,
-"output_path": "models/zeshel/crossencoder/",
+"output_path": "/shared/s3/lab07/jongsong/BLINK/crossencoder/",
 "patience": 100,
 "layers": 4,
 "step_size":100,

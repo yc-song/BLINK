@@ -59,7 +59,8 @@ oom_architecture= [
     "additive_score",
     "extend_extension",
     "extend_multi",
-    "extend_single"
+    "extend_single",
+    "baseline"
 
 ] 
 # mlp_based_architecture and BERT_bsaed_architecture use different optimizer call
@@ -135,8 +136,7 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
         #     result[i] = [labels[i].item()] + [cand.item() for cand in hard_cands[i] if cand != labels[i]]
         #     result[i] = result[i][:top_k]             
         # print("after", mode, idxs, idxs.shape)
-    candidate_input = candidate_input[idxs.cpu()].to(device)
-    top_k=params["top_k"]
+    candidate_input = candidate_input[idxs.cpu()[:,:top_k]].to(device)
     ## context_input shape: (Size ,1024) e.g.  (10000, 1024)
     ## candidate_input shape: (Size, 65, 1024) e.g. (10000, 65, 1024)
     if wo64 == False:
@@ -179,7 +179,7 @@ def modify(context_input, candidate_input, params, world, idxs, mode = "train", 
         
 
 
-def evaluate(reranker, eval_dataloader, device, logger, context_length, candidate_input, zeshel=False, silent=True, mode = "valid", input = None, wo64 = True, hard_entire = False, recall_k = 4):
+def evaluate(reranker, eval_dataloader, device, logger, context_length, candidate_input, zeshel=False, silent=True, mode = "valid", input = None, wo64 = True, hard_entire = False, recall_k = 4, candidate_emb = None):
     reranker.eval()
     if silent:
         iter_ = eval_dataloader
@@ -210,7 +210,13 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
     for i in range(world_size):
         acc[i] = 0.0
         tot[i] = 0.0
-
+    if params["distill"]:
+        nn_context = torch.tensor([])
+        nn_candidates = candidate_emb
+        nn_labels = torch.tensor([])
+        nn_worlds = torch.tensor([])
+        nn_scores = torch.tensor([])
+        nn_idxs = torch.tensor([])
     # all_logits = []
     cnt = 0
     for step, batch in enumerate(iter_):
@@ -220,9 +226,15 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
         batch = tuple(t.to(device) for t in batch)
         context_input = batch[0]
         label_input = batch[1]
+        
         if params["top_k"]>100 or params["architecture"] in oom_architecture:
             world = batch[2]
             idxs = batch[3]
+            if params["distill"]:
+                nn_context = torch.cat((nn_context, batch[5].cpu()), dim = 0)
+                nn_worlds = torch.cat((nn_worlds, batch[2].int().cpu()), dim = 0)
+                nn_idxs = torch.cat((nn_idxs, batch[3].int().cpu()), dim = 0)
+                nn_labels = torch.cat((nn_labels, batch[1].int().cpu()), dim = 0)
             if mode == "valid" and not hard_entire:
                 mask_eval_cands = label_input < params["eval_cands"]
                 context_input= context_input[mask_eval_cands]
@@ -230,7 +242,6 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
                 idxs = idxs[mask_eval_cands, :params["eval_cands"]] 
                 label_input = label_input[mask_eval_cands] 
             context_input, label_input = modify(context_input, candidate_input, params, world, idxs, mode = "valid", wo64 = params["without_64"], label_input = label_input)
-
         with torch.no_grad():
             if hard_entire:
                 logits = reranker(context_input, label_input, context_length, evaluate = True, hard_entire = True)
@@ -238,10 +249,11 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
                 eval_loss, logits, _, _ = reranker(context_input, label_input, context_length, evaluate = True)
             else:
                 eval_loss, logits = reranker(context_input, label_input, context_length, evaluate = True)
+        if params["distill"]:
+            nn_scores = torch.cat((nn_scores, logits.cpu()), dim = 0)
         logits = logits.detach().cpu().numpy()
         label_ids = label_input.cpu().numpy()
         tmp_eval_accuracy, eval_result = utils.accuracy(logits, label_ids)
-        
         eval_recall += utils.recall(logits, label_ids, k = recall_k)
         # print("recall", eval_recall)
         eval_mrr+=utils.mrr(logits, label_ids, input = context_input)
@@ -268,6 +280,30 @@ def evaluate(reranker, eval_dataloader, device, logger, context_length, candidat
                 acc[src_w] += eval_result[i]
                 tot[src_w] += 1
         nb_eval_steps += 1
+    if params["distill"]:
+        nn_data = {
+            'context_vecs': nn_context,
+            'labels': nn_labels,
+            'nn_scores': nn_scores,
+            'indexes': nn_idxs,
+            'worlds': nn_worlds,
+            'candidate_vecs': nn_candidates
+        }
+        print(nn_data)
+        print("context shape", nn_data["context_vecs"].shape)
+        print("score shape", nn_data["nn_scores"].shape)
+        print("index shape", nn_data["indexes"].shape)
+        print("labels", nn_data["labels"].shape)
+        print("worlds", nn_data["worlds"].shape)
+        print("candidate", nn_data["candidate_vecs"].shape)
+        save_data_dir = os.path.join(
+            params['output_path'],
+            "top%d_candidates_distill" % params['top_k'],
+        )
+        if not os.path.exists(save_data_dir):
+            os.makedirs(save_data_dir)
+        save_data_path = os.path.join(save_data_dir, "{}_{}.t7".format(params["mode"], params["architecture"]))
+        torch.save(nn_data, save_data_path)
     normalized_eval_accuracy = -1
     if nb_eval_examples > 0:
         normalized_eval_accuracy = eval_accuracy / nb_eval_examples
@@ -560,6 +596,9 @@ def main(params):
             idxs_train = train_data["indexes"][:params["train_size"]]
             label_input_train = train_data["labels"][:params["train_size"]]
             bi_encoder_score_train = train_data["nn_scores"][:params["train_size"]]
+            if params["distill"]:
+                context_emb_train = train_data["context_emb"][:params["train_size"]]
+                candidate_emb_train = train_data["candidate_emb"]
             if params["zeshel"]:
                 src_input_train = train_data['worlds'][:params["train_size"]]
         else:
@@ -709,16 +748,20 @@ def main(params):
     if params["debug"]:
         max_n = 200
         context_input_train = context_input_train[:max_n]
-        candidate_input_train = candidate_input_train[:max_n]
         src_input_train = src_input_train[:max_n]
         label_input_train = label_input_train[:max_n]
         bi_encoder_score_train = bi_encoder_score_train[:max_n]
         idxs_train = idxs_train[:max_n]
+        if params["distill"]:
+            context_emb_train = context_emb_train[:max_n]
 
     if params["top_k"]<100 and not params["architecture"] in oom_architecture:
-        context_input_train, _ = modify(context_input_train, candidate_input_train, params, src_input_train, idxs_train, mode = "train", wo64 = params["without_64"])
+        context_input_train, _ = modify(context_input_train, candidate_input_train, params, src_input_train, idxs_train, mode = "train", label_input = label_input_train, wo64 = params["without_64"])
     if params["zeshel"]:
-        train_tensor_data = TensorDataset(context_input_train, label_input_train, src_input_train, idxs_train, bi_encoder_score_train,)
+        if params["distill"]:
+            train_tensor_data = TensorDataset(context_input_train, label_input_train, src_input_train, idxs_train, bi_encoder_score_train,context_emb_train)
+        else:
+            train_tensor_data = TensorDataset(context_input_train, label_input_train, src_input_train, idxs_train, bi_encoder_score_train,)
         
     else:
         train_tensor_data = TensorDataset(context_input_train, label_input_train, src_input_train, idxs_train, bi_encoder_score_train)
@@ -828,7 +871,7 @@ def main(params):
     # print("valid context", context_input.shape)
     # print("valid candidate", candidate_input.shape)
     if params["top_k"]<100 and not params["architecture"] in oom_architecture:
-        context_input_valid, _ = modify(context_input_valid, candidate_input_valid, params, src_input_valid, idxs_valid, mode = "valid", wo64=params["without_64"])
+        context_input_valid, _ = modify(context_input_valid, candidate_input_valid, params, src_input_valid, idxs_valid, mode = "valid", label_input = label_input_valid, wo64=params["without_64"])
     # print("valid modify", context_input.shape)
     valid_tensor_data = TensorDataset(context_input_valid, label_input_valid, src_input_valid, idxs_valid)
     valid_sampler = SequentialSampler(valid_tensor_data)
@@ -841,6 +884,30 @@ def main(params):
 
     #evaluate before training
     if not params["resume"]:
+        if params["distill"]:
+            logger.info("Evaluation on the training dataset")
+            train_acc=evaluate(
+                    reranker,
+                    train_dataloader,
+                    candidate_input = candidate_input_train,
+                    device=device,
+                    logger=logger,
+                    context_length=context_length,
+                    zeshel=params["zeshel"],
+                    silent=params["silent"],
+                    wo64=params["without_64"],
+                    candidate_emb = candidate_emb_train
+                )
+
+            
+            wandb.log({
+                "acc/train_acc": train_acc["normalized_accuracy"],
+                "acc/train_acc(macro)": train_acc["macro_accuracy"],
+                'mrr/train_mrr':train_acc["mrr"],
+                "recall/train_recall":train_acc["recall"]
+                })
+        if params["distill"]:
+            return
         logger.info("Evaluation on the development dataset")
         val_acc=evaluate(
             reranker,
@@ -948,7 +1015,6 @@ def main(params):
             batch_size=params["train_batch_size"]
             )
 
-        model.train()
 
 
         tr_loss = 0
@@ -994,7 +1060,6 @@ def main(params):
             if params["dot_product"]:
                 wandb.log({
                 "loss/val_loss": val_loss_sum / (len(iter_valid) * grad_acc_steps),
-                "params/epoch": epoch_idx,
                 "loss/val_label_loss": val_loss_1_sum / (len(iter_valid) * grad_acc_steps),
                 "loss/val_dot_loss": val_loss_2_sum / (len(iter_valid) * grad_acc_steps),
                 
@@ -1005,7 +1070,6 @@ def main(params):
             else:
                 wandb.log({
                 "loss/val_loss": val_loss_sum / (len(iter_valid) * grad_acc_steps),
-                "params/epoch": epoch_idx
                 })
             val_loss_sum = 0
         if params["architecture"] != "raw_context_text" and params["architecture"] != "mlp_with_bert" and not params["hard_negative"]:
@@ -1144,7 +1208,6 @@ def main(params):
                 "params/epoch":epoch_idx
             })
         logger.info("\n")
-        model.train()
         if nested_break==True:
             break
 

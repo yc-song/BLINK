@@ -168,8 +168,22 @@ class BiEncoderRanker(torch.nn.Module):
                 elif k.startswith('model.label_encoder'):
                     name = k.replace('model.label_encoder', 'cand_encoder')
                 new_state_dict[name] = v
-            self.model.load_state_dict(new_state_dict, strict = False)
+            self.model.load_state_dict(new_state_dict)
+        elif self.params["mvd"]:
+            if cpu:
+                state_dict = torch.load(fname, map_location="cpu")
+            else:
+                state_dict = torch.load(fname)
+            new_state_dict = OrderedDict()
+            for k, v in state_dict.items():
+                if k.startswith('mention_encoder'):
+                    name = k.replace( 'mention_encoder', 'context_encoder.bert_model')
+                    new_state_dict[name] = v
+                elif k.startswith('entity_encoder'):
+                    name = k.replace('entity_encoder', 'cand_encoder.bert_model')
+                    new_state_dict[name] = v
 
+            self.model.load_state_dict(new_state_dict)
         else:
             if not cpu:
                 state_dict = torch.load(fname, map_location="cpu")
@@ -193,7 +207,7 @@ class BiEncoderRanker(torch.nn.Module):
                     else:
                         name = k
                         new_state_dict[name] = v
-                self.load_state_dict(new_state_dict, strict=False)
+                self.load_state_dict(new_state_dict)
 
     def build_model(self):
         self.model = BiEncoderModule(self.params, self.tokenizer)

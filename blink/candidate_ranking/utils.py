@@ -120,6 +120,7 @@ def mrr_label64(out, labels):
 
 def mrr(out, labels, input = None): #implement mean reciprocal rank
     idx_array = rankdata(-out, axis=1, method='min')
+    labels = labels.astype(int)
     
     rank = np.take_along_axis(idx_array, labels[:, None], axis=1)
     #print out best and worst cases
@@ -141,6 +142,7 @@ def mrr(out, labels, input = None): #implement mean reciprocal rank
 
 def recall(out, labels, k=4):
     idx_array = rankdata(-out, axis=1, method='min')
+    labels = labels.astype(int)
     rank = np.take_along_axis(idx_array, labels[:,None], axis=1)
     # print("labels_recall", labels[:,None])
     # print("idx_array", idx_array)

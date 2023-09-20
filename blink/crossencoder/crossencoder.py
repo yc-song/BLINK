@@ -6,6 +6,7 @@
 #
 import os
 import numpy as np
+import wandb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -48,7 +49,7 @@ from transformers.models.bert.tokenization_bert import BertTokenizer
 # from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 
 # from blink.common.ranker_base_cross import BertEncoder, get_model_obj
-from blink.common.ranker_base import BertEncoder
+from blink.common.ranker_base_cross import BertEncoder
 
 from blink.common.optimizer import get_bert_optimizer
 from blink.common.params import ENT_START_TAG, ENT_END_TAG, ENT_TITLE_TAG
@@ -75,8 +76,8 @@ class CrossEncoderModule(torch.nn.Module):
             encoder_model = RawTextBertModel.from_pretrained(model_path)
             encoder_model.params=params
         elif params["architecture"] == "baseline":
-            config = BertConfig.from_pretrained(model_path, output_hidden_states=True)
-            encoder_model = BertModel.from_pretrained(model_path, config = config)
+            # config = BertConfig.from_pretrai/ned(model_path, output_hidden_states=True)
+            encoder_model = BertModel.from_pretrained(model_path)
         elif params["architecture"] == "mlp_with_bert":
             encoder_model = BertModel.from_pretrained(model_path)
         encoder_model.resize_token_embeddings(len(tokenizer))
@@ -87,6 +88,7 @@ class CrossEncoderModule(torch.nn.Module):
                 tokenizer,
                 layer_pulled=params["pull_from_layer"],
                 add_linear=params["add_linear"],
+                params = params
             )
             self.config = self.encoder.bert_model.config
 
@@ -112,7 +114,7 @@ class CrossEncoderModule(torch.nn.Module):
 
         embedding_ctxt, _, _ = self.encoder(token_idx_ctxt.int(), segment_idx_ctxt.int(), mask_ctxt.int())
         return embedding_ctxt.squeeze(-1)
-
+ 
 
 class CrossEncoderRanker(torch.nn.Module):
     def __init__(self, params, shared=None):
@@ -144,8 +146,7 @@ class CrossEncoderRanker(torch.nn.Module):
 
         # init model
         self.build_model()
-        if params["path_to_model"] is not None and params["anncur"] is None:
-            print("load")
+        if params["path_to_model"] is not None:
             self.load_model(params["path_to_model"])
         self.model = self.model.to(self.device)
         self.data_parallel = params.get("data_parallel")
@@ -153,11 +154,24 @@ class CrossEncoderRanker(torch.nn.Module):
             self.model = torch.nn.DataParallel(self.model)
 
     def load_model(self, fname, cpu=False):
-        if cpu:
-            state_dict = torch.load(fname, map_location=lambda storage, location: "cpu")
+        if self.params["anncur"]:
+            old_state_dict = torch.load(fname)["state_dict"]
+            state_dict = OrderedDict()
+            for k, v in old_state_dict.items():
+                if k.startswith('model.encoder.bert_model'):
+                    name = k.replace('model.encoder.bert_model', 'encoder.bert_model')
+                    state_dict[name] = v
+                elif k.startswith('model.encoder.additional_linear'):
+                    name = k.replace('model.encoder.additional_linear', 'encoder.additional_linear')
+                    state_dict[name] = v
+            self.model.load_state_dict(state_dict, strict = False)
         else:
-            state_dict = torch.load(fname)
-        self.model.load_state_dict(state_dict)
+            if cpu:
+                state_dict = torch.load(fname, map_location=lambda storage, location: "cpu")
+            
+            else:
+                state_dict = torch.load(fname)
+            self.model.load_state_dict(state_dict)
 
     def save(self, output_dir):
         self.save_model(output_dir)
@@ -204,7 +218,6 @@ class CrossEncoderRanker(torch.nn.Module):
         # print(scores.shape)
         # print(label_input.shape)
         loss = F.cross_entropy(scores, label_input, reduction="mean")
-        print(loss)
         return loss, scores
 
 
@@ -608,14 +621,31 @@ class TransformersBertEncoder(nn.Module):
             attentions=all_self_attentions,
             cross_attentions=all_cross_attentions,
         )
-class IdentityInitializedTransformerEncoderLayer(torch.nn.TransformerEncoderLayer):
-    def __init__(self, d_model, n_head, num_layers, dim_feedforward=3072, dropout=0.1, activation="relu"):
-        super(IdentityInitializedTransformerEncoderLayer, self).__init__(d_model, n_head)
+class IdentityInitializedTransformerEncoderLayer(torch.nn.Module):
+    def __init__(self, d_model, n_head, num_layers, dim_feedforward=3072, dropout=0.1, activation="relu", params=None):
+        super(IdentityInitializedTransformerEncoderLayer, self).__init__()
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )  
+        self.encoder_layer = torch.nn.TransformerEncoderLayer(d_model, n_head)
+        self.weight = nn.Parameter(torch.tensor([params["initial_weight"]], requires_grad = True))
     def forward(self,src, src_mask=None, src_key_padding_mask=None, is_causal = False):
-        out1 = super(IdentityInitializedTransformerEncoderLayer, self).forward(src, src_mask, src_key_padding_mask, is_causal)
-        out = out1 + src
-        
+        out1 = self.encoder_layer(src, src_mask, src_key_padding_mask, is_causal)
+        sigmoid_weight = torch.sigmoid(self.weight)
+        wandb.log({"params/weight": self.weight.item()})
+        out = sigmoid_weight*out1 + (1-sigmoid_weight)*src
         return out
+# class IdentityInitializedTransformerEncoderLayer(torch.nn.TransformerEncoderLayer):
+#     def __init__(self, d_model, n_head, num_layers, dim_feedforward=3072, dropout=0.1, activation="relu"):
+#         super(IdentityInitializedTransformerEncoderLayer, self).__init__(d_model, n_head)
+#         self.device = torch.device(
+#             "cuda" if torch.cuda.is_available() else "cpu"
+#         )  
+#         self.weight = torch.zeros(1, requires_grad = True).to(self.device)
+#     def forward(self,src, src_mask=None, src_key_padding_mask=None, is_causal = False):
+#         out1 = super(IdentityInitializedTransformerEncoderLayer, self).forward(src, src_mask, src_key_padding_mask, is_causal)
+#         out = self.weight*out1 + (1-self.weight)*src
+#         return out
 class ExtendExtensionModule(torch.nn.Module):
     def __init__(self, params, tokenizer):
         super(ExtendExtensionModule, self).__init__()
@@ -633,7 +663,7 @@ class ExtendExtensionModule(torch.nn.Module):
         self.classification_head = torch.nn.Linear(self.embed_dim, 1)
         self.token_type_embeddings = nn.Embedding(2, self.embed_dim).to(self.device)
         if params["identity_init"]:
-            self.transformerencoderlayer = IdentityInitializedTransformerEncoderLayer(self.embed_dim, self.n_heads, self.num_layers).to(self.device)
+            self.transformerencoderlayer = IdentityInitializedTransformerEncoderLayer(self.embed_dim, self.n_heads, self.num_layers, params = self.params).to(self.device)
             self.transformerencoder = torch.nn.TransformerEncoder(self.transformerencoderlayer, self.num_layers)
 
         # self.layer_norm = torch.nn.LayerNorm(self.embed_dim)
@@ -642,18 +672,17 @@ class ExtendExtensionModule(torch.nn.Module):
         #     nn.ReLU(),
         #     nn.Linear(self.embed_dim, self.embed_dim),
         # )
-        print(self.transformerencoder)
     def forward(self, input):
         # attention_result = self.attentionlayer(input, input, input)[0]
         # attention_result = self.layer_norm(input+attention_result)
         # linear_result = self.feedforward(attention_result)
         # attention_result = self.layer_norm(linear_result+attention_result)
-        token_type_context = torch.zeros(input.size(0), 1).int().to(self.device)
-        token_embedding_context = self.token_type_embeddings(token_type_context)
-        token_type_candidate = torch.ones(input.size(0), input.size(1)-1).int().to(self.device)
-        token_embedding_candidate = self.token_type_embeddings(token_type_candidate)
-        token_embedding_type = torch.cat([token_embedding_context, token_embedding_candidate], dim = 1)
-        input += token_embedding_type
+        # token_type_context = torch.zeros(input.size(0), 1).int().to(self.device)
+        # token_embedding_context = self.token_type_embeddings(token_type_context)
+        # token_type_candidate = torch.ones(input.size(0), input.size(1)-1).int().to(self.device)
+        # token_embedding_candidate = self.token_type_embeddings(token_type_candidate)
+        # token_embedding_type = torch.cat([token_embedding_context, token_embedding_candidate], dim = 1)
+        # input += token_embedding_type
         attention_result = self.transformerencoder(input)
         if self.params["classification_head"] == "dot":
             context_input = attention_result[:,0,:].unsqueeze(1)
@@ -700,7 +729,7 @@ class ExtendExtensionRanker(torch.nn.Module):
             self.model = ExtendExtensionModule(params, self.tokenizer)
             self.model = self.model.to(self.device)
         self.criterion = torch.nn.CrossEntropyLoss()
-    def forward(self, input, label_input, context_length, evaluate = False, hard_entire = False, beam_ratio =0.5, sampling = False):
+    def forward(self, input, label_input, context_length, evaluate = False, hard_entire = False, beam_ratio =0.5, sampling = False, teacher_scores = None):
         if hard_entire:
             round = 1
             top_k = self.params["sample_cands"]
@@ -750,9 +779,28 @@ class ExtendExtensionRanker(torch.nn.Module):
             return scores
         else:
             scores = self.model(input)
-            loss = self.criterion(scores, label_input)
+            if self.params["distill"]:
+                loss, student_loss, teacher_loss = distillation_loss(scores, teacher_scores, label_input.long())
+                return loss, scores, student_loss, teacher_loss
+            else:
+                loss = self.criterion(scores, label_input.long())
         return loss, scores
 
+
+def distillation_loss(student_outputs, teacher_outputs, labels, alpha = 0.5, temperature = 1, valid = False):
+    if teacher_outputs is not None:
+        teacher_loss = nn.KLDivLoss(reduction='batchmean')(nn.functional.log_softmax(student_outputs/temperature, dim=1),
+                             nn.functional.softmax(teacher_outputs/temperature, dim=1))
+        # print(student_outputs, nn.functional.log_softmax(student_outputs, dim=1))
+        # print(teacher_outputs, nn.functional.softmax(teacher  _outputs, dim=1))
+    else: 
+        device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )  
+        teacher_loss = torch.tensor([0.]).to(device)
+    student_loss = nn.CrossEntropyLoss()(student_outputs, labels)
+    loss = alpha*student_loss + (1-alpha)*teacher_loss
+    return loss, student_loss, teacher_loss
 
 
 '''DotProductModule and DotProductRanker'''
